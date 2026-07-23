@@ -1,10 +1,8 @@
 name: Build Index
 on:
-  push:
-    paths: ["webd/**"]
   workflow_dispatch:
   schedule:
-    - cron: "0 1 * * *"
+    - cron: "0 23 * * *"
 
 permissions:
   contents: write

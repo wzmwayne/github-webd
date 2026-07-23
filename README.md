@@ -5,24 +5,24 @@
 ## 功能
 
 - 文件浏览：树形目录导航，文件列表表格展示
-- 文件分享：复制 gh-proxy 加速分享链接
-- 分块下载：大文件自动拼接，SHA256 完整性校验
+- 文件下载：单文件流式下载或分块文件多线程并行下载，SHA256 完整性校验
 - 代理测速：内置 67 个 gh-proxy 节点，20 线程并发测速
-- 文件上传：拖拽 / 点击上传，超过 90MB 自动分块
-- 自动索引：GitHub Actions 监听 webd/ 目录变更，自动计算 SHA256 并生成 index.json
+- 文件上传：拖拽或点击上传，超过 20MB 自动分块，支持多级目录
+- 索引构建：GitHub Actions 每日 07:00 或手动触发，自动计算 SHA256 并生成 index.json
 
 ## 文件结构
 
 ```
 仓库根目录/
-├── index.html              # 文件浏览页面
-├── update.html             # 文件上传页面
+├── index.html              # 文件浏览（树形 + 表格）
+├── download.html           # 文件下载（测速 + 并行下载 + SHA256）
+├── update.html             # 文件上传（拖拽 + 分块 + 路径选择）
 ├── config.js               # 配置文件
 ├── index.json              # 自动生成的文件索引
 ├── test_file.dat           # 代理测速测试文件
 ├── .github/
 │   ├── workflows/
-│   │   └── index.yml       # 索引构建工作流
+│   │   └── index.yml       # 索引构建工作流（仅手动/定时）
 │   └── scripts/
 │       └── generate-index.js  # 索引生成脚本
 └── webd/                   # 文件存储目录

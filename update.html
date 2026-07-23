@@ -60,8 +60,8 @@ h1{font-size:22px;margin-bottom:16px;color:#333}
 
 <div id="pathRow">
     <label>目标路径（选填）</label>
-    <input type="text" id="targetPath" placeholder="留空则上传到 webd/ 根目录，输入 myfolder 则上传到 webd/myfolder/">
-    <div class="hint">仅支持一层子目录，无需首尾斜杠</div>
+    <input type="text" id="targetPath" placeholder="留空=webd/根目录，如 a/b/c/d/e/f/g/h 则上传到 webd/a/b/c/d/e/f/g/h/">
+    <div class="hint">支持多级目录，如 a/b/c/d，最多 8 层。无需首尾斜杠。</div>
 </div>
 
 <div id="dropZone">
@@ -128,8 +128,17 @@ $('authBtn').addEventListener('click', async function() {
     pat = $('patInput').value.trim();
     if (!pat) { toast('请输入 PAT'); return; }
     try {
-        const user = await api('/user');
-        $('authStatus').textContent = '验证成功 - ' + (user.login || '');
+        await api('/user');
+        const repoData = await api('/repos/' + owner + '/' + repo);
+        const perms = repoData.permissions || {};
+        if (!perms.push) {
+            $('authStatus').textContent = '失败: Token 没有仓库写入权限，请检查 repo 或 workflow 权限';
+            $('authStatus').style.color = '#f44336';
+            toast('Token 缺少 push 权限', '#f44336');
+            pat = '';
+            return;
+        }
+        $('authStatus').textContent = '验证通过 - ' + repoData.full_name + ' (push: ok)';
         authenticated = true;
         $('patInput').disabled = true;
         this.disabled = true;
@@ -269,36 +278,60 @@ async function uploadFile(fileObj, index) {
         updateFileProgress(index, 0, 'uploading');
 
         if (!needsChunk) {
-            $('actionInfo').textContent = fileName + ': 上传中...';
+            $('actionInfo').textContent = fileName + ': 编码中...';
             const b64 = await blobToBase64(file);
-            updateFileProgress(index, 40, 'uploading');
+            updateFileProgress(index, 50, 'uploading');
+            $('actionInfo').textContent = fileName + ': 上传中...';
             const filePath = targetPrefix + '/' + fileName;
             await uploadViaContents(filePath, b64, 'upload: ' + fileName);
             updateFileProgress(index, 100, 'done');
             toast('上传成功 ' + fileName);
-        } else {
-            const totalChunks = Math.ceil(fileSize / chunkThreshold);
-            for (let i = 0; i < totalChunks; i++) {
-                const start = i * chunkThreshold;
-                const end = Math.min(start + chunkThreshold, fileSize);
-                const slice = file.slice(start, end);
-                const chunkName = fileName + '.' + String(i + 1).padStart(4, '0');
-
-                updateFileProgress(index, (i / totalChunks) * 90, 'uploading');
-                $('actionInfo').textContent = fileName + ': 上传分块 ' + (i + 1) + '/' + totalChunks;
-
-                const b64 = await blobToBase64(slice);
-                const filePath = targetPrefix + '/' + chunkName;
-                await uploadViaContents(filePath, b64, 'upload: ' + fileName + ' chunk ' + (i + 1) + '/' + totalChunks);
-            }
-            updateFileProgress(index, 100, 'done');
-            toast('上传成功 ' + fileName + ' (' + totalChunks + ' 块)');
+            $('actionInfo').textContent = '';
+            return;
         }
+
+        const totalChunks = Math.ceil(fileSize / chunkThreshold);
+
+        const tasks = [];
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * chunkThreshold;
+            const end = Math.min(start + chunkThreshold, fileSize);
+            const slice = file.slice(start, end);
+            const chunkName = fileName + '.' + String(i + 1).padStart(4, '0');
+            const filePath = targetPrefix + '/' + chunkName;
+            tasks.push(async () => {
+                const b64 = await blobToBase64(slice);
+                await uploadViaContents(filePath, b64, 'upload: ' + fileName + ' chunk ' + (i + 1) + '/' + totalChunks);
+            });
+        }
+
+        let completed = 0;
+        function updateChunkProgress() {
+            completed++;
+            const pct = Math.round((completed / totalChunks) * 100);
+            updateFileProgress(index, pct, 'uploading');
+            $('actionInfo').textContent = fileName + ': ' + completed + '/' + totalChunks + ' 块';
+        }
+
+        $('actionInfo').textContent = fileName + ': 0/' + totalChunks + ' 块';
+
+        const concurrency = 5;
+        const executing = [];
+        for (const task of tasks) {
+            const p = task().then(r => { executing.splice(executing.indexOf(p), 1); updateChunkProgress(); return r; });
+            executing.push(p);
+            if (executing.length >= concurrency) await Promise.race(executing);
+        }
+        await Promise.all(executing);
+
+        updateFileProgress(index, 100, 'done');
+        toast('上传成功 ' + fileName + ' (' + totalChunks + ' 块)');
+        $('actionInfo').textContent = '';
     } catch (e) {
         updateFileProgress(index, files[index].progress, 'error', e.message);
         toast('上传失败 ' + fileName + ': ' + e.message, '#f44336');
+        $('actionInfo').textContent = '';
     }
-    $('actionInfo').textContent = '';
 }
 
 $('uploadBtn').addEventListener('click', async function() {
@@ -313,8 +346,17 @@ $('uploadBtn').addEventListener('click', async function() {
         await uploadFile(files[i], i);
     }
 
+    $('actionInfo').textContent = '正在触发索引更新...';
+    try {
+        await api('/repos/' + owner + '/' + repo + '/actions/workflows/index.yml/dispatches', 'POST', { ref: branch });
+        $('actionInfo').textContent = '所有文件处理完毕，索引构建已触发';
+        toast('已触发索引更新');
+    } catch (e) {
+        $('actionInfo').textContent = '上传完成，但触发索引失败: ' + e.message;
+        toast('索引触发失败: ' + e.message + '，可手动触发', '#f44336');
+    }
+
     this.disabled = false;
-    $('actionInfo').textContent = '所有文件处理完毕';
 });
 
 window.addEventListener('DOMContentLoaded', function() {
