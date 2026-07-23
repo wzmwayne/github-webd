@@ -365,15 +365,63 @@ function copyLink(filePath) {
     });
 }
 
+function loadCachedResults() {
+    try {
+        const raw = localStorage.getItem('proxySpeedTest');
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (!data.timestamp || !data.results) return null;
+        const age = Date.now() - data.timestamp;
+        if (age > 86400000) return null;
+        return data;
+    } catch { return null; }
+}
+
+function saveCachedResults(results) {
+    const data = { timestamp: Date.now(), results: results };
+    try { localStorage.setItem('proxySpeedTest', JSON.stringify(data)); } catch {}
+}
+
+function applyResultsToDropdown(results, totalTime) {
+    const sel = document.getElementById('proxySelect');
+    const status = document.getElementById('proxyStatus');
+    const successResults = results.filter(r => r.success);
+    successResults.sort((a, b) => b.speed - a.speed);
+
+    sel.innerHTML = '<option value="">直连 (无代理)</option>';
+    if (successResults.length > 0) {
+        for (const r of successResults) {
+            const opt = document.createElement('option');
+            opt.value = r.node;
+            opt.textContent = r.node + ' (' + r.speed.toFixed(2) + ' KB/s)';
+            sel.appendChild(opt);
+        }
+        sel.value = successResults[0].node;
+        selectedProxy = successResults[0].node;
+        const ts = new Date();
+        const timeStr = ts.getHours().toString().padStart(2,'0') + ':' + ts.getMinutes().toString().padStart(2,'0');
+        status.textContent = '\u2705 ' + timeStr + ' \u6700\u5FEB: ' + successResults[0].node + ' (' + successResults[0].speed.toFixed(2) + ' KB/s)' + (totalTime ? ' | ' + totalTime + 's' : '');
+    } else {
+        status.textContent = '\u274C 所有节点不可用';
+    }
+}
+
 function initProxyZone() {
     const sel = document.getElementById('proxySelect');
-    sel.innerHTML = '<option value="">直连 (无代理)</option>';
-    for (const n of CONFIG.nodes) {
-        const opt = document.createElement('option');
-        opt.value = n.name;
-        opt.textContent = '[' + n.type + '] ' + n.name;
-        sel.appendChild(opt);
+
+    const cached = loadCachedResults();
+    if (cached) {
+        applyResultsToDropdown(cached.results);
+    } else {
+        sel.innerHTML = '<option value="">直连 (无代理)</option>';
+        for (const n of CONFIG.nodes) {
+            const opt = document.createElement('option');
+            opt.value = n.name;
+            opt.textContent = '[' + n.type + '] ' + n.name;
+            sel.appendChild(opt);
+        }
     }
+
     sel.addEventListener('change', function() {
         selectedProxy = this.value;
     });
@@ -390,7 +438,6 @@ async function startSpeedTest() {
     const testUrl = CONFIG.rawBase + 'test_file.dat?t=' + Date.now();
     const concurrency = 20;
     const timeout = 15000;
-    const results = [];
 
     const testOne = (node) => {
         return new Promise(resolve => {
@@ -434,24 +481,8 @@ async function startSpeedTest() {
     const res = await runBatch(all, concurrency);
     const totalTime = ((performance.now() - startAll) / 1000).toFixed(1);
 
-    const successResults = res.filter(r => r.success);
-    successResults.sort((a, b) => b.speed - a.speed);
-
-    const sel = document.getElementById('proxySelect');
-    sel.innerHTML = '<option value="">直连 (无代理)</option>';
-    if (successResults.length > 0) {
-        for (const r of successResults) {
-            const opt = document.createElement('option');
-            opt.value = r.node;
-            opt.textContent = r.node + ' (' + r.speed.toFixed(2) + ' KB/s)';
-            sel.appendChild(opt);
-        }
-        sel.value = successResults[0].node;
-        selectedProxy = successResults[0].node;
-        status.textContent = '\u2705 完成 ' + totalTime + 's, 最快: ' + successResults[0].node + ' (' + successResults[0].speed.toFixed(2) + ' KB/s)';
-    } else {
-        status.textContent = '\u274C 所有节点不可用 (' + totalTime + 's)';
-    }
+    applyResultsToDropdown(res, totalTime);
+    saveCachedResults(res);
     btn.disabled = false;
 }
 
