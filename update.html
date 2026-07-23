@@ -321,48 +321,35 @@ async function uploadFile(fileObj, index) {
             updateFileProgress(index, 100, 'done');
             toast('上传成功 ' + fileName);
             $('actionInfo').textContent = '';
-            return;
+            return true;
         }
 
         const totalChunks = Math.ceil(fileSize / chunkThreshold);
-        const tasks = [];
+        $('actionInfo').textContent = fileName + ': 0/' + totalChunks + ' 块';
+
         for (let i = 0; i < totalChunks; i++) {
             const start = i * chunkThreshold;
             const end = Math.min(start + chunkThreshold, fileSize);
             const slice = file.slice(start, end);
             const chunkName = fileName + '.' + String(i + 1).padStart(4, '0');
             const filePath = targetPrefix + '/' + chunkName;
-            tasks.push(async () => {
-                const b64 = await blobToBase64(slice);
-                await uploadViaContents(filePath, b64, 'upload: ' + fileName + ' chunk ' + (i + 1) + '/' + totalChunks);
-            });
+            $('actionInfo').textContent = fileName + ': 编码块 ' + (i + 1) + '/' + totalChunks;
+            const b64 = await blobToBase64(slice);
+            $('actionInfo').textContent = fileName + ': 上传块 ' + (i + 1) + '/' + totalChunks;
+            await uploadViaContents(filePath, b64, 'upload: ' + fileName + ' chunk ' + (i + 1) + '/' + totalChunks);
+            updateFileProgress(index, Math.round(((i + 1) / totalChunks) * 100), 'uploading');
+            $('actionInfo').textContent = fileName + ': ' + (i + 1) + '/' + totalChunks + ' 块';
         }
-
-        let completed = 0;
-        function updateChunkProgress() {
-            completed++;
-            updateFileProgress(index, Math.round((completed / totalChunks) * 100), 'uploading');
-            $('actionInfo').textContent = fileName + ': ' + completed + '/' + totalChunks + ' 块';
-        }
-
-        $('actionInfo').textContent = fileName + ': 0/' + totalChunks + ' 块';
-
-        const concurrency = 5;
-        const executing = [];
-        for (const task of tasks) {
-            const p = task().then(r => { executing.splice(executing.indexOf(p), 1); updateChunkProgress(); return r; });
-            executing.push(p);
-            if (executing.length >= concurrency) await Promise.race(executing);
-        }
-        await Promise.all(executing);
 
         updateFileProgress(index, 100, 'done');
         toast('上传成功 ' + fileName + ' (' + totalChunks + ' 块)');
         $('actionInfo').textContent = '';
+        return true;
     } catch (e) {
         updateFileProgress(index, files[index].progress, 'error', e.message);
         toast('上传失败 ' + fileName + ': ' + e.message, '#f44336');
         $('actionInfo').textContent = '';
+        return false;
     }
 }
 
@@ -373,19 +360,26 @@ $('uploadBtn').addEventListener('click', async function() {
 
     this.disabled = true;
 
+    let allSuccess = true;
     for (let i = 0; i < files.length; i++) {
         if (files[i].status === 'done') continue;
-        await uploadFile(files[i], i);
+        const ok = await uploadFile(files[i], i);
+        if (!ok) allSuccess = false;
     }
 
-    $('actionInfo').textContent = '正在触发索引更新...';
-    try {
-        await api('/repos/' + owner + '/' + repo + '/actions/workflows/index.yml/dispatches', 'POST', { ref: branch });
-        $('actionInfo').textContent = '所有文件处理完毕，索引构建已触发';
-        toast('已触发索引更新');
-    } catch (e) {
-        $('actionInfo').textContent = '上传完成，但触发索引失败: ' + e.message;
-        toast('索引触发失败: ' + e.message + '，可手动触发', '#f44336');
+    if (allSuccess) {
+        $('actionInfo').textContent = '正在触发索引更新...';
+        try {
+            await api('/repos/' + owner + '/' + repo + '/actions/workflows/index.yml/dispatches', 'POST', { ref: branch });
+            $('actionInfo').textContent = '所有文件处理完毕，索引构建已触发';
+            toast('已触发索引更新');
+        } catch (e) {
+            $('actionInfo').textContent = '上传完成，但触发索引失败: ' + e.message;
+            toast('索引触发失败: ' + e.message + '，可手动触发', '#f44336');
+        }
+    } else {
+        $('actionInfo').textContent = '有文件上传失败，跳过索引更新';
+        toast('部分文件上传失败，未触发索引更新', '#f44336');
     }
 
     this.disabled = false;
