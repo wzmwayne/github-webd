@@ -7,20 +7,10 @@
 <script src="config.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,-apple-system,sans-serif}
-body{display:flex;height:100vh;background:#f5f5f5}
-#sidebar{width:320px;min-width:320px;background:#fff;border-right:1px solid #ddd;display:flex;flex-direction:column}
-#sidebar h2{padding:16px;font-size:18px;border-bottom:1px solid #eee}
-#tree{flex:1;overflow-y:auto;padding:8px 0}
-.tree-item{padding:6px 16px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:14px;user-select:none}
-.tree-item:hover{background:#f0f0f0}
-.tree-item.selected{background:#e3f2fd;font-weight:600}
-.tree-item .icon{width:20px;text-align:center;flex-shrink:0;transition:transform .2s}
-.tree-children{padding-left:24px}
-.tree-leaf{padding:6px 16px 6px 40px;cursor:pointer;font-size:14px;display:flex;align-items:center;gap:6px}
-.tree-leaf:hover{background:#f0f0f0}
-#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+body{min-height:100vh;background:#f5f5f5}
+#hintBar{display:none;padding:8px 20px;background:#fff3e0;border-bottom:1px solid #ffe0b2;font-size:13px;color:#e65100;cursor:pointer}
 #pathBar{padding:12px 20px;background:#fff;border-bottom:1px solid #ddd;font-size:14px;color:#666}
-#content{flex:1;overflow:auto}
+#content{overflow:auto}
 table{width:100%;border-collapse:collapse;background:#fff}
 th{text-align:left;padding:10px 16px;font-size:13px;color:#666;border-bottom:2px solid #eee;font-weight:600;position:sticky;top:0;background:#fff}
 td{padding:8px 16px;font-size:14px;border-bottom:1px solid #f0f0f0}
@@ -32,27 +22,23 @@ tr:hover td{background:#fafafa}
 .size-cell{white-space:nowrap;color:#666}
 .time-cell{white-space:nowrap;color:#666;font-size:13px}
 .empty{padding:40px;text-align:center;color:#999;font-size:15px}
+.back{color:#666;font-style:italic}
+.back:hover{background:#f5f5f5}
 </style>
 </head>
 <body>
-<div id="sidebar">
-    <h2>&#x1F4C1; WebD Cloud</h2>
-    <div id="tree"></div>
-</div>
-<div id="main">
-    <div id="pathBar"><span id="currentPath">/</span></div>
-    <div id="content">
-        <table id="fileTable">
-            <thead><tr><th>名称</th><th>大小</th><th>修改时间</th></tr></thead>
-            <tbody id="fileBody"></tbody>
-        </table>
-        <div class="empty" id="emptyHint" style="display:none">此目录为空</div>
-    </div>
+<div id="hintBar"></div>
+<div id="pathBar"><span id="currentPath">/</span></div>
+<div id="content">
+    <table id="fileTable">
+        <thead><tr><th>名称</th><th>大小</th><th>修改时间</th></tr></thead>
+        <tbody id="fileBody"></tbody>
+    </table>
+    <div class="empty" id="emptyHint" style="display:none">此目录为空</div>
 </div>
 
 <script>
 let indexData = [];
-let treeData = null;
 let currentNode = '';
 
 function formatSize(bytes) {
@@ -86,131 +72,74 @@ function getFileIcon(entry) {
     return '\uD83D\uDCC4';
 }
 
-function buildTree(entries) {
-    const root = { name: '', children: {}, files: [], path: '' };
-    for (const e of entries) {
-        if (e.type === 'chunk') continue;
-        const parts = e.path.split('/');
-        let node = root;
-        for (let i = 0; i < parts.length - 1; i++) {
-            if (!node.children[parts[i]]) {
-                node.children[parts[i]] = { name: parts[i], children: {}, files: [], path: parts.slice(0, i+1).join('/') };
-            }
-            node = node.children[parts[i]];
-        }
-        node.files.push(e);
-    }
-    return root;
-}
-
-function renderTree() {
-    const container = document.getElementById('tree');
-    container.innerHTML = '';
-    renderTreeNode(container, treeData, '');
-}
-
-function renderTreeNode(parentEl, node) {
-    const dirs = Object.keys(node.children).sort();
-    for (const dirName of dirs) {
-        const child = node.children[dirName];
-        const item = document.createElement('div');
-        item.className = 'tree-item' + (currentNode === child.path ? ' selected' : '');
-        item.innerHTML = '<span class="icon">\u25B6</span><span>' + dirName + '</span>';
-        item._dirNode = child;
-        item._childrenContainer = document.createElement('div');
-        item._childrenContainer.className = 'tree-children';
-        item._childrenContainer.style.display = 'none';
-        item._expanded = false;
-
-        item.addEventListener('click', function(e) {
-            e.stopPropagation();
-            if (!this._expanded) {
-                this._expanded = true;
-                this.querySelector('.icon').textContent = '\u25BC';
-                this._childrenContainer.style.display = '';
-                if (this._childrenContainer.children.length === 0) {
-                    renderTreeNode(this._childrenContainer, this._dirNode);
-                }
-            } else {
-                this._expanded = false;
-                this.querySelector('.icon').textContent = '\u25B6';
-                this._childrenContainer.style.display = 'none';
-            }
-            currentNode = child.path;
-            document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
-            this.classList.add('selected');
-            renderTable();
-        });
-        parentEl.appendChild(item);
-        parentEl.appendChild(item._childrenContainer);
-    }
-
-    for (const f of node.files) {
-        const leaf = document.createElement('div');
-        leaf.className = 'tree-leaf';
-        leaf.innerHTML = '<span class="icon">' + getFileIcon(f) + '</span><a href="download.html?path=' + encodeURIComponent(f.path) + '" style="color:#1976d2;text-decoration:none">' + f.path.split('/').pop() + '</a>';
-        parentEl.appendChild(leaf);
-    }
-}
-
 function renderTable() {
     const tbody = document.getElementById('fileBody');
     const emptyHint = document.getElementById('emptyHint');
     tbody.innerHTML = '';
 
-    const entries = [];
+    const prefix = currentNode ? currentNode + '/' : '';
+    const dirs = new Set();
 
-    if (currentNode === '' || currentNode === null) {
-        for (const dirName of Object.keys(treeData.children).sort()) {
-            entries.push({ path: dirName, _isDir: true });
-        }
-        for (const f of treeData.files) {
-            if (f.type !== 'chunk') entries.push(f);
-        }
-    } else if (treeData) {
-        const parts = currentNode.split('/');
-        let node = treeData;
-        for (const p of parts) {
-            if (node.children[p]) node = node.children[p];
-            else break;
-        }
-        for (const dirName of Object.keys(node.children).sort()) {
-            entries.push({ path: currentNode + '/' + dirName, _isDir: true, _name: dirName });
-        }
-        for (const f of node.files) {
-            if (f.type !== 'chunk') entries.push({ ...f, _name: f.path.split('/').pop() });
-        }
+    for (const e of indexData) {
+        if (e.type === 'chunk') continue;
+        const p = e.path;
+        if (!p.startsWith(prefix)) continue;
+        const rest = p.slice(prefix.length);
+        if (!rest || rest.indexOf('/') === -1) continue;
+        const d = rest.split('/')[0];
+        if (d) dirs.add(d);
     }
 
-    entries.sort((a, b) => {
-        if (a._isDir && !b._isDir) return -1;
-        if (!a._isDir && b._isDir) return 1;
-        return (a._name || a.path).localeCompare(b._name || b.path);
-    });
+    const result = [];
 
-    if (entries.length === 0) {
+    if (currentNode) {
+        result.push({ _isBack: true });
+    }
+
+    for (const d of [...dirs].sort()) {
+        result.push({ _isDir: true, _name: d, _dirPath: currentNode ? currentNode + '/' + d : d });
+    }
+
+    const files = [];
+    for (const e of indexData) {
+        if (e.type === 'chunk') continue;
+        const p = e.path;
+        if (!p.startsWith(prefix)) continue;
+        const rest = p.slice(prefix.length);
+        if (!rest || rest.indexOf('/') !== -1) continue;
+        files.push(e);
+    }
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    for (const f of files) result.push(f);
+
+    if (result.length === 0) {
         emptyHint.style.display = '';
         return;
     }
     emptyHint.style.display = 'none';
 
-    for (const e of entries) {
+    for (const e of result) {
         const tr = document.createElement('tr');
-        if (e._isDir) {
-            const name = e._name || e.path.split('/').pop();
-            tr.innerHTML = '<td><div class="name-cell"><span class="icon">\uD83D\uDCC1</span>' + name + '</div></td><td class="size-cell">-</td><td class="time-cell">-</td>';
+        if (e._isBack) {
+            tr.innerHTML = '<td colspan="3"><div class="name-cell back"><span class="icon">\u219D</span> ..</div></td>';
             tr.style.cursor = 'pointer';
             tr.addEventListener('click', function() {
-                currentNode = e.path;
-                document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
-                for (const ti of document.querySelectorAll('.tree-item')) {
-                    if (ti._dirNode && ti._dirNode.path === e.path) { ti.click(); return; }
-                }
+                const parts = currentNode.split('/');
+                parts.pop();
+                currentNode = parts.join('/');
+                document.getElementById('currentPath').textContent = '/' + currentNode;
+                renderTable();
+            });
+        } else if (e._isDir) {
+            tr.innerHTML = '<td><div class="name-cell"><span class="icon">\uD83D\uDCC1</span>' + e._name + '</div></td><td class="size-cell">-</td><td class="time-cell">-</td>';
+            tr.style.cursor = 'pointer';
+            tr.addEventListener('click', function() {
+                currentNode = e._dirPath;
                 document.getElementById('currentPath').textContent = '/' + currentNode;
                 renderTable();
             });
         } else {
-            const name = e._name || e.path.split('/').pop();
+            const name = e.path.split('/').pop();
             const link = 'download.html?path=' + encodeURIComponent(e.path);
             tr.innerHTML = '<td><div class="name-cell"><span class="icon">' + getFileIcon(e) + '</span><a href="' + link + '">' + name + '</a></div></td><td class="size-cell">' + formatSize(e.size) + '</td><td class="time-cell">' + formatTime(e.mtime) + '</td>';
         }
@@ -221,16 +150,48 @@ function renderTable() {
 }
 
 async function loadIndex() {
+    const pagesUrl = 'index.json?_t=' + Date.now();
+    const rawUrl = CONFIG.rawBase + 'index.json?_t=' + Date.now();
+    let pagesData = null, rawData = null, pagesErr = null, rawErr = null;
+
     try {
-        const resp = await fetch('index.json?_t=' + Date.now());
-        const raw = await resp.json();
-        indexData = raw;
-        treeData = buildTree(indexData);
-        renderTree();
-        renderTable();
-    } catch (e) {
-        document.getElementById('fileBody').innerHTML = '<tr><td colspan="3" style="text-align:center;padding:40px;color:red;">加载 index.json 失败: ' + e.message + '</td></tr>';
+        const r = await fetch(pagesUrl);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        pagesData = await r.json();
+    } catch (e) { pagesErr = e.message; }
+
+    try {
+        const r = await fetch(rawUrl);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        rawData = await r.json();
+    } catch (e) { rawErr = e.message; }
+
+    function showHint(msg) {
+        const el = document.getElementById('hintBar');
+        el.textContent = '\u26A0 ' + msg + ' (\u70B9\u51FB\u5173\u95ED)';
+        el.style.display = '';
+        el.onclick = function() { this.style.display = 'none'; };
     }
+
+    if (rawData && pagesData) {
+        if (JSON.stringify(rawData) !== JSON.stringify(pagesData)) {
+            indexData = rawData;
+            showHint('\u5DF2\u5207\u6362\u4E3A\u5B9E\u65F6\u7D22\u5F15\uFF08raw \u6A21\u5F0F\uFF09');
+        } else {
+            indexData = pagesData;
+        }
+    } else if (rawData) {
+        indexData = rawData;
+        showHint('Pages \u7D22\u5F15\u4E0D\u53EF\u7528\uFF0C\u4F7F\u7528 raw \u6A21\u5F0F');
+    } else if (pagesData) {
+        indexData = pagesData;
+        showHint('Raw \u7D22\u5F15\u4E0D\u53EF\u7528\uFF0C\u4F7F\u7528 Pages \u7F13\u5B58');
+    } else {
+        document.getElementById('fileBody').innerHTML = '<tr><td colspan="3" style="text-align:center;padding:40px;color:red;">\u52A0\u8F7D\u7D22\u5F15\u5931\u8D25<br>Pages: ' + (pagesErr || 'unknown') + '<br>Raw: ' + (rawErr || 'unknown') + '</td></tr>';
+        return;
+    }
+
+    renderTable();
 }
 
 window.addEventListener('DOMContentLoaded', function() {
