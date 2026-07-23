@@ -54,6 +54,9 @@ h1{font-size:22px;margin-bottom:16px;color:#333}
     <label>GitHub Personal Access Token</label>
     <input type="password" id="patInput" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
     <div class="hint">需要 repo 权限。Token 仅存于内存，刷新页面后需重新输入。</div>
+    <label style="font-size:13px;display:flex;align-items:center;gap:6px;margin-bottom:12px;cursor:pointer">
+        <input type="checkbox" id="savePatCheck"> 记住 PAT（本地加密存储）
+    </label>
     <button id="authBtn">验证</button>
     <div id="authStatus" class="status"></div>
 </div>
@@ -89,6 +92,8 @@ const repo = CONFIG.repo;
 const branch = CONFIG.branch;
 const webdPrefix = CONFIG.webdPrefix;
 const chunkThreshold = 20 * 1024 * 1024;
+const STORAGE_KEY = 'webd_encrypted_pat';
+const KEY_STORE = 'webd_crypto_key';
 
 function $(id) { return document.getElementById(id); }
 
@@ -116,16 +121,83 @@ function getTargetPrefix() {
 }
 
 async function api(url, method, body) {
-    const headers = { 'Authorization': 'Bearer ' + pat, 'Accept': 'application/vnd.github+json' };
+    const headers = { 'Authorization': 'Bearer ' + pat, 'Accept': 'application/json' };
     if (body) headers['Content-Type'] = 'application/json';
-    const resp = await fetch(apiBase + url, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+    const resp = await fetch(apiBase + url, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : null });
+    if (resp.status === 204) return null;
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.message || ('HTTP ' + resp.status));
     return data;
 }
 
-$('authBtn').addEventListener('click', async function() {
-    pat = $('patInput').value.trim();
+async function generateKey() {
+    return await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+}
+
+async function exportKey(key) {
+    return await crypto.subtle.exportKey('jwk', key);
+}
+
+async function importKey(jwk) {
+    return await crypto.subtle.importKey('jwk', jwk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+async function saveKey(key) {
+    const jwk = await exportKey(key);
+    try { localStorage.setItem(KEY_STORE, JSON.stringify(jwk)); } catch {}
+}
+
+function loadKey() {
+    try {
+        const raw = localStorage.getItem(KEY_STORE);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch { return null; }
+}
+
+async function encryptPat(text) {
+    const key = await generateKey();
+    await saveKey(key);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(text);
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, encoded);
+    const combined = new Uint8Array(iv.length + encrypted.byteLength);
+    combined.set(iv, 0);
+    combined.set(new Uint8Array(encrypted), iv.length);
+    const b64 = btoa(String.fromCharCode(...combined));
+    try { localStorage.setItem(STORAGE_KEY, b64); } catch {}
+}
+
+async function decryptPat() {
+    try {
+        const b64 = localStorage.getItem(STORAGE_KEY);
+        if (!b64) return '';
+        const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const iv = raw.slice(0, 12);
+        const data = raw.slice(12);
+        const jwk = loadKey();
+        if (!jwk) return '';
+        const key = await importKey(jwk);
+        const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, data);
+        return new TextDecoder().decode(decrypted);
+    } catch { return ''; }
+}
+
+function clearSavedPat() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+}
+
+async function tryAutoAuth() {
+    const saved = await decryptPat();
+    if (!saved) return;
+    $('patInput').value = saved;
+    const btn = $('authBtn');
+    btn.click();
+}
+
+async function doAuth() {
+    const input = $('patInput');
+    pat = input.value.trim();
     if (!pat) { toast('请输入 PAT'); return; }
     try {
         await api('/user');
@@ -140,56 +212,41 @@ $('authBtn').addEventListener('click', async function() {
         }
         $('authStatus').textContent = '验证通过 - ' + repoData.full_name + ' (push: ok)';
         authenticated = true;
-        $('patInput').disabled = true;
-        this.disabled = true;
+        input.disabled = true;
+        document.getElementById('authBtn').disabled = true;
         $('uploadBtn').disabled = files.length === 0;
+        if ($('savePatCheck').checked) await encryptPat(pat);
         toast('验证通过');
     } catch (e) {
         $('authStatus').textContent = '失败 ' + e.message;
         $('authStatus').style.color = '#f44336';
         toast('验证失败: ' + e.message, '#f44336');
     }
-});
+}
+
+$('authBtn').addEventListener('click', doAuth);
 
 const dropZone = $('dropZone');
 const fileInput = $('fileInput');
 
 dropZone.addEventListener('click', function() { fileInput.click(); });
-
-dropZone.addEventListener('dragover', function(e) {
-    e.preventDefault();
-    this.classList.add('dragover');
-});
-dropZone.addEventListener('dragleave', function() {
-    this.classList.remove('dragover');
-});
+dropZone.addEventListener('dragover', function(e) { e.preventDefault(); this.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', function() { this.classList.remove('dragover'); });
 dropZone.addEventListener('drop', function(e) {
     e.preventDefault();
     this.classList.remove('dragover');
-    if (e.dataTransfer.files.length > 0) {
-        addFiles(e.dataTransfer.files);
-    }
+    if (e.dataTransfer.files.length > 0) addFiles(e.dataTransfer.files);
 });
 
 fileInput.addEventListener('change', function() {
-    if (this.files.length > 0) {
-        addFiles(this.files);
-        this.value = '';
-    }
+    if (this.files.length > 0) { addFiles(this.files); this.value = ''; }
 });
 
 function addFiles(fileList) {
     for (const f of fileList) {
         const existing = files.findIndex(x => x.name === f.name && x.size === f.size);
         if (existing >= 0) files.splice(existing, 1);
-        files.push({
-            file: f,
-            name: f.name,
-            size: f.size,
-            status: 'wait',
-            progress: 0,
-            error: ''
-        });
+        files.push({ file: f, name: f.name, size: f.size, status: 'wait', progress: 0, error: '' });
     }
     renderQueue();
     if (authenticated) $('uploadBtn').disabled = false;
@@ -204,17 +261,9 @@ function renderQueue() {
         const div = document.createElement('div');
         div.className = 'file-item';
         div.id = 'file-' + i;
-
         const chunkCount = Math.ceil(f.file.size / chunkThreshold);
         const chunkInfo = f.file.size >= chunkThreshold ? ('分为 ' + chunkCount + ' 块') : '单文件';
-        const statusMap = {
-            'wait': '<span class="status-wait">等待上传</span>',
-            'uploading': '<span class="status-active">上传中...</span>',
-            'done': '<span class="status-ok">完成</span>',
-            'error': '<span class="status-err">失败 ' + f.error + '</span>'
-        };
-
-        div.innerHTML = '<div class="info"><div class="name">' + f.name + '</div><div class="meta">' + formatSize(f.size) + ' &middot; ' + chunkInfo + '</div></div><div class="progress"><div class="progress-bar" style="width:' + f.progress + '%"></div></div><div class="pct">' + Math.round(f.progress) + '%</div><div class="status">' + (statusMap[f.status] || '') + '</div>';
+        div.innerHTML = '<div class="info"><div class="name">' + f.name + '</div><div class="meta">' + formatSize(f.size) + ' &middot; ' + chunkInfo + '</div></div><div class="progress"><div class="progress-bar" style="width:' + f.progress + '%"></div></div><div class="pct">' + Math.round(f.progress) + '%</div><div class="status">' + (f.status === 'wait' ? '<span class="status-wait">等待上传</span>' : f.status === 'uploading' ? '<span class="status-active">上传中...</span>' : f.status === 'done' ? '<span class="status-ok">完成</span>' : '<span class="status-err">失败 ' + f.error + '</span>') + '</div>';
         container.appendChild(div);
     }
 }
@@ -222,49 +271,28 @@ function renderQueue() {
 function updateFileProgress(index, pct, status, error) {
     if (index < 0 || index >= files.length) return;
     if (pct !== undefined) files[index].progress = pct;
-    if (status) {
-        files[index].status = status;
-        if (status === 'error') files[index].error = error || '';
-    }
+    if (status) { files[index].status = status; if (status === 'error') files[index].error = error || ''; }
     const item = document.getElementById('file-' + index);
     if (!item) return;
-    const bar = item.querySelector('.progress-bar');
-    const pctEl = item.querySelector('.pct');
-    const statusEl = item.querySelector('.status');
-    if (bar) bar.style.width = files[index].progress + '%';
-    if (pctEl) pctEl.textContent = Math.round(files[index].progress) + '%';
-    if (statusEl) {
-        const s = files[index].status;
-        const e = files[index].error;
-        const map = {
-            'wait': '<span class="status-wait">等待上传</span>',
-            'uploading': '<span class="status-active">上传中...</span>',
-            'done': '<span class="status-ok">完成</span>',
-            'error': '<span class="status-err">失败 ' + e + '</span>'
-        };
-        statusEl.innerHTML = map[s] || '';
+    if (item.querySelector('.progress-bar')) item.querySelector('.progress-bar').style.width = files[index].progress + '%';
+    if (item.querySelector('.pct')) item.querySelector('.pct').textContent = Math.round(files[index].progress) + '%';
+    if (item.querySelector('.status')) {
+        const s = files[index].status, e = files[index].error;
+        item.querySelector('.status').innerHTML = s === 'wait' ? '<span class="status-wait">等待上传</span>' : s === 'uploading' ? '<span class="status-active">上传中...</span>' : s === 'done' ? '<span class="status-ok">完成</span>' : '<span class="status-err">失败 ' + e + '</span>';
     }
 }
 
 function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => {
-            const b64 = reader.result.split(',')[1];
-            resolve(b64);
-        };
+        reader.onload = () => resolve(reader.result.split(',')[1]);
         reader.onerror = reject;
         reader.readAsDataURL(blob);
     });
 }
 
 async function uploadViaContents(filePath, contentBase64, message) {
-    const body = {
-        message: message,
-        content: contentBase64,
-        branch: branch
-    };
-    return await api('/repos/' + owner + '/' + repo + '/contents/' + filePath, 'PUT', body);
+    return await api('/repos/' + owner + '/' + repo + '/contents/' + filePath, 'PUT', { message: message, content: contentBase64, branch: branch });
 }
 
 async function uploadFile(fileObj, index) {
@@ -282,8 +310,7 @@ async function uploadFile(fileObj, index) {
             const b64 = await blobToBase64(file);
             updateFileProgress(index, 50, 'uploading');
             $('actionInfo').textContent = fileName + ': 上传中...';
-            const filePath = targetPrefix + '/' + fileName;
-            await uploadViaContents(filePath, b64, 'upload: ' + fileName);
+            await uploadViaContents(targetPrefix + '/' + fileName, b64, 'upload: ' + fileName);
             updateFileProgress(index, 100, 'done');
             toast('上传成功 ' + fileName);
             $('actionInfo').textContent = '';
@@ -291,7 +318,6 @@ async function uploadFile(fileObj, index) {
         }
 
         const totalChunks = Math.ceil(fileSize / chunkThreshold);
-
         const tasks = [];
         for (let i = 0; i < totalChunks; i++) {
             const start = i * chunkThreshold;
@@ -308,8 +334,7 @@ async function uploadFile(fileObj, index) {
         let completed = 0;
         function updateChunkProgress() {
             completed++;
-            const pct = Math.round((completed / totalChunks) * 100);
-            updateFileProgress(index, pct, 'uploading');
+            updateFileProgress(index, Math.round((completed / totalChunks) * 100), 'uploading');
             $('actionInfo').textContent = fileName + ': ' + completed + '/' + totalChunks + ' 块';
         }
 
@@ -359,8 +384,9 @@ $('uploadBtn').addEventListener('click', async function() {
     this.disabled = false;
 });
 
-window.addEventListener('DOMContentLoaded', function() {
+window.addEventListener('DOMContentLoaded', async function() {
     renderQueue();
+    tryAutoAuth();
 });
 </script>
 </body>
