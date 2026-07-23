@@ -281,20 +281,17 @@ async function loadIndex() {
     }
 }
 
-async function fetchFileWithProxy(url) {
-    if (selectedProxy) {
-        return fetch('https://' + selectedProxy + '/' + url);
-    }
+async function fetchUrl(filePath) {
+    const url = selectedProxy ? CONFIG.buildProxyUrl(selectedProxy, filePath) : CONFIG.buildRawUrl(filePath);
     return fetch(url);
 }
 
 async function downloadSingle(filePath) {
     const entry = indexData.find(e => e.path === filePath);
     if (!entry) { toast('文件记录不存在'); return; }
-    const rawUrl = CONFIG.rawBase + filePath;
     try {
         toast('正在下载...');
-        const resp = await fetchFileWithProxy(rawUrl);
+        const resp = await fetchUrl(filePath);
         if (!resp.ok) { toast('下载失败: HTTP ' + resp.status); return; }
         const blob = await resp.blob();
         if (entry.sha256) {
@@ -316,9 +313,8 @@ async function downloadMerged(filePath) {
         const blobs = [];
         for (let i = 0; i < entry.chunks.length; i++) {
             const chunkPath = entry.chunks[i];
-            const rawUrl = CONFIG.rawBase + chunkPath;
             toast('下载中: ' + (i + 1) + '/' + entry.chunks.length);
-            const resp = await fetchFileWithProxy(rawUrl);
+            const resp = await fetchUrl(chunkPath);
             if (!resp.ok) { toast('分块 ' + chunkPath + ' 下载失败: HTTP ' + resp.status); return; }
             blobs.push(await resp.blob());
         }
@@ -391,7 +387,7 @@ async function startSpeedTest() {
     btn.disabled = true;
     status.textContent = '测速中...';
 
-    const testUrl = 'https://raw.githubusercontent.com/' + CONFIG.owner + '/' + CONFIG.repo + '/refs/heads/main/test_file.dat?t=' + Date.now();
+    const testUrl = CONFIG.rawBase + 'test_file.dat?t=' + Date.now();
     const concurrency = 20;
     const timeout = 15000;
     const results = [];
