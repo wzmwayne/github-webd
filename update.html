@@ -9,13 +9,17 @@
 *{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,-apple-system,sans-serif}
 body{padding:20px;background:#f5f5f5;min-height:100vh}
 h1{font-size:22px;margin-bottom:16px;color:#333}
-#authBox{background:#fff;border:1px solid #ddd;border-radius:8px;padding:24px;margin-bottom:20px;max-width:480px}
+#authBox{background:#fff;border:1px solid #ddd;border-radius:8px;padding:24px;margin-bottom:20px;max-width:500px}
 #authBox label{display:block;font-size:14px;margin-bottom:6px;color:#555}
 #authBox input[type=password]{width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px;margin-bottom:12px}
 #authBox .hint{font-size:12px;color:#888;margin-bottom:12px}
 #authBox button{padding:10px 24px;background:#1976d2;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer}
 #authBox button:hover{background:#1565c0}
 #authBox .status{font-size:13px;margin-top:8px;color:#4caf50}
+#pathRow{margin-bottom:16px}
+#pathRow label{display:block;font-size:13px;color:#555;margin-bottom:4px}
+#pathRow input{width:100%;padding:8px 10px;border:1px solid #ccc;border-radius:4px;font-size:14px}
+#pathRow .hint{font-size:12px;color:#888;margin-top:2px}
 #dropZone{background:#fff;border:2px dashed #ccc;border-radius:8px;padding:40px;text-align:center;margin-bottom:20px;cursor:pointer;transition:all .2s}
 #dropZone.dragover{border-color:#1976d2;background:#e3f2fd}
 #dropZone .icon{font-size:48px;color:#999}
@@ -32,9 +36,9 @@ h1{font-size:22px;margin-bottom:16px;color:#333}
 .file-item .pct{font-size:12px;color:#666;min-width:36px;text-align:right}
 .file-item .status{font-size:12px;min-width:80px;text-align:right}
 .status-ok{color:#4caf50}
-.status-err{color:#f44336}
 .status-wait{color:#999}
 .status-active{color:#1976d2}
+.status-err{color:#f44336}
 #actions{margin-top:16px}
 #actions button{padding:10px 28px;background:#4caf50;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer;margin-right:8px}
 #actions button:hover{background:#388e3c}
@@ -44,27 +48,33 @@ h1{font-size:22px;margin-bottom:16px;color:#333}
 </head>
 <body>
 
-<h1>&#x1F4C1; WebD Cloud - &#x4E0A\u4F20\u6587\u4EF6</h1>
+<h1>WebD Cloud - 上传文件</h1>
 
 <div id="authBox">
     <label>GitHub Personal Access Token</label>
     <input type="password" id="patInput" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
     <div class="hint">需要 repo 权限。Token 仅存于内存，刷新页面后需重新输入。</div>
-    <button id="authBtn">&#x1F510; 验证</button>
+    <button id="authBtn">验证</button>
     <div id="authStatus" class="status"></div>
+</div>
+
+<div id="pathRow">
+    <label>目标路径（选填）</label>
+    <input type="text" id="targetPath" placeholder="留空则上传到 webd/ 根目录，输入 myfolder 则上传到 webd/myfolder/">
+    <div class="hint">仅支持一层子目录，无需首尾斜杠</div>
 </div>
 
 <div id="dropZone">
     <div class="icon">&#x1F4C2;</div>
     <div class="text">拖拽文件到此处，或点击选择文件</div>
-    <div class="subtext">支持单个文件，超过 90MB 自动分块上传</div>
-    <input type="file" id="fileInput" multiple>
+    <div class="subtext">支持单个文件，超过 20MB 自动分块上传</div>
+    <input type="file" id="fileInput">
 </div>
 
 <div id="queue"></div>
 
 <div id="actions">
-    <button id="uploadBtn" disabled>&#x1F680; 开始上传</button>
+    <button id="uploadBtn" disabled>开始上传</button>
     <span class="info" id="actionInfo"></span>
 </div>
 
@@ -78,7 +88,7 @@ const owner = CONFIG.owner;
 const repo = CONFIG.repo;
 const branch = CONFIG.branch;
 const webdPrefix = CONFIG.webdPrefix;
-const chunkThreshold = CONFIG.chunkThreshold;
+const chunkThreshold = 20 * 1024 * 1024;
 
 function $(id) { return document.getElementById(id); }
 
@@ -99,35 +109,39 @@ function formatSize(bytes) {
     return size.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
 }
 
+function getTargetPrefix() {
+    const p = $('targetPath').value.trim();
+    if (!p) return webdPrefix;
+    return webdPrefix + '/' + p.replace(/^\/+|\/+$/g, '');
+}
+
 async function api(url, method, body) {
     const headers = { 'Authorization': 'Bearer ' + pat, 'Accept': 'application/vnd.github+json' };
-    if (body) { headers['Content-Type'] = 'application/json'; }
+    if (body) headers['Content-Type'] = 'application/json';
     const resp = await fetch(apiBase + url, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.message || ('HTTP ' + resp.status));
     return data;
 }
 
-// Auth
 $('authBtn').addEventListener('click', async function() {
     pat = $('patInput').value.trim();
     if (!pat) { toast('请输入 PAT'); return; }
     try {
         const user = await api('/user');
-        $('authStatus').textContent = '\u2705 \u9A8C\u8BC1\u6210\u529F - ' + (user.login || '');
+        $('authStatus').textContent = '验证成功 - ' + (user.login || '');
         authenticated = true;
         $('patInput').disabled = true;
         this.disabled = true;
         $('uploadBtn').disabled = files.length === 0;
         toast('验证通过');
     } catch (e) {
-        $('authStatus').textContent = '\u274C ' + e.message;
+        $('authStatus').textContent = '失败 ' + e.message;
         $('authStatus').style.color = '#f44336';
         toast('验证失败: ' + e.message, '#f44336');
     }
 });
 
-// Drop zone
 const dropZone = $('dropZone');
 const fileInput = $('fileInput');
 
@@ -163,7 +177,6 @@ function addFiles(fileList) {
             file: f,
             name: f.name,
             size: f.size,
-            chunks: [],
             status: 'wait',
             progress: 0,
             error: ''
@@ -183,15 +196,16 @@ function renderQueue() {
         div.className = 'file-item';
         div.id = 'file-' + i;
 
-        const chunkInfo = f.file && f.file.size >= chunkThreshold ? ('\u5206\u4E3A ' + Math.ceil(f.file.size / chunkThreshold) + ' \u5757') : '\u5355\u6587\u4EF6';
+        const chunkCount = Math.ceil(f.file.size / chunkThreshold);
+        const chunkInfo = f.file.size >= chunkThreshold ? ('分为 ' + chunkCount + ' 块') : '单文件';
         const statusMap = {
             'wait': '<span class="status-wait">等待上传</span>',
             'uploading': '<span class="status-active">上传中...</span>',
-            'done': '<span class="status-ok">\u2705 完成</span>',
-            'error': '<span class="status-err">\u274C ' + f.error + '</span>'
+            'done': '<span class="status-ok">完成</span>',
+            'error': '<span class="status-err">失败 ' + f.error + '</span>'
         };
 
-        div.innerHTML = '<div class="info"><div class="name">' + f.name + '</div><div class="meta">' + formatSize(f.size) + ' \xB7 ' + chunkInfo + '</div></div><div class="progress"><div class="progress-bar" style="width:' + f.progress + '%"></div></div><div class="pct">' + Math.round(f.progress) + '%</div><div class="status">' + (statusMap[f.status] || '') + '</div>';
+        div.innerHTML = '<div class="info"><div class="name">' + f.name + '</div><div class="meta">' + formatSize(f.size) + ' &middot; ' + chunkInfo + '</div></div><div class="progress"><div class="progress-bar" style="width:' + f.progress + '%"></div></div><div class="pct">' + Math.round(f.progress) + '%</div><div class="status">' + (statusMap[f.status] || '') + '</div>';
         container.appendChild(div);
     }
 }
@@ -213,112 +227,78 @@ function updateFileProgress(index, pct, status, error) {
     if (statusEl) {
         const s = files[index].status;
         const e = files[index].error;
-        if (s === 'wait') statusEl.innerHTML = '<span class="status-wait">等待上传</span>';
-        else if (s === 'uploading') statusEl.innerHTML = '<span class="status-active">上传中...</span>';
-        else if (s === 'done') statusEl.innerHTML = '<span class="status-ok">\u2705 完成</span>';
-        else if (s === 'error') statusEl.innerHTML = '<span class="status-err">\u274C ' + e + '</span>';
+        const map = {
+            'wait': '<span class="status-wait">等待上传</span>',
+            'uploading': '<span class="status-active">上传中...</span>',
+            'done': '<span class="status-ok">完成</span>',
+            'error': '<span class="status-err">失败 ' + e + '</span>'
+        };
+        statusEl.innerHTML = map[s] || '';
     }
 }
 
-function arrayBufferToBase64(buffer) {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.length;
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const b64 = reader.result.split(',')[1];
+            resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
+async function uploadViaContents(filePath, contentBase64, message) {
+    const body = {
+        message: message,
+        content: contentBase64,
+        branch: branch
+    };
+    return await api('/repos/' + owner + '/' + repo + '/contents/' + filePath, 'PUT', body);
 }
 
 async function uploadFile(fileObj, index) {
     const file = fileObj.file;
     const fileName = fileObj.name;
     const fileSize = file.size;
+    const targetPrefix = getTargetPrefix();
     const needsChunk = fileSize >= chunkThreshold;
 
     try {
         updateFileProgress(index, 0, 'uploading');
-        const blobShas = [];
-        const chunkPaths = [];
 
-        if (needsChunk) {
+        if (!needsChunk) {
+            $('actionInfo').textContent = fileName + ': 上传中...';
+            const b64 = await blobToBase64(file);
+            updateFileProgress(index, 40, 'uploading');
+            const filePath = targetPrefix + '/' + fileName;
+            await uploadViaContents(filePath, b64, 'upload: ' + fileName);
+            updateFileProgress(index, 100, 'done');
+            toast('上传成功 ' + fileName);
+        } else {
             const totalChunks = Math.ceil(fileSize / chunkThreshold);
             for (let i = 0; i < totalChunks; i++) {
                 const start = i * chunkThreshold;
                 const end = Math.min(start + chunkThreshold, fileSize);
                 const slice = file.slice(start, end);
-                const buf = await slice.arrayBuffer();
-                const b64 = arrayBufferToBase64(buf);
+                const chunkName = fileName + '.' + String(i + 1).padStart(4, '0');
 
-                updateFileProgress(index, (i / totalChunks) * 70, 'uploading');
+                updateFileProgress(index, (i / totalChunks) * 90, 'uploading');
                 $('actionInfo').textContent = fileName + ': 上传分块 ' + (i + 1) + '/' + totalChunks;
 
-                const blobData = await api('/repos/' + owner + '/' + repo + '/git/blobs', 'POST', {
-                    content: b64,
-                    encoding: 'base64'
-                });
-
-                const chunkName = fileName + '.' + String(i + 1).padStart(4, '0');
-                blobShas.push(blobData.sha);
-                chunkPaths.push({ path: webdPrefix + '/' + chunkName, sha: blobData.sha });
+                const b64 = await blobToBase64(slice);
+                const filePath = targetPrefix + '/' + chunkName;
+                await uploadViaContents(filePath, b64, 'upload: ' + fileName + ' chunk ' + (i + 1) + '/' + totalChunks);
             }
-            updateFileProgress(index, 70, 'uploading');
-        } else {
-            const buf = await file.arrayBuffer();
-            const b64 = arrayBufferToBase64(buf);
-
-            updateFileProgress(index, 40, 'uploading');
-            $('actionInfo').textContent = fileName + ': 创建 Blob...';
-
-            const blobData = await api('/repos/' + owner + '/' + repo + '/git/blobs', 'POST', {
-                content: b64,
-                encoding: 'base64'
-            });
-
-            blobShas.push(blobData.sha);
-            chunkPaths.push({ path: webdPrefix + '/' + fileName, sha: blobData.sha });
-            updateFileProgress(index, 70, 'uploading');
+            updateFileProgress(index, 100, 'done');
+            toast('上传成功 ' + fileName + ' (' + totalChunks + ' 块)');
         }
-
-        $('actionInfo').textContent = fileName + ': 获取当前提交...';
-        const refData = await api('/repos/' + owner + '/' + repo + '/git/refs/heads/' + branch);
-        const commitData = await api('/repos/' + owner + '/' + repo + '/git/commits/' + refData.object.sha);
-        const currentTreeSha = commitData.tree.sha;
-
-        updateFileProgress(index, 80, 'uploading');
-        $('actionInfo').textContent = fileName + ': 创建 Tree...';
-        const treeData = await api('/repos/' + owner + '/' + repo + '/git/trees', 'POST', {
-            base_tree: currentTreeSha,
-            tree: chunkPaths.map(cp => ({
-                path: cp.path,
-                mode: '100644',
-                type: 'blob',
-                sha: cp.sha
-            }))
-        });
-
-        updateFileProgress(index, 85, 'uploading');
-        $('actionInfo').textContent = fileName + ': 创建 Commit...';
-        const commitMsg = needsChunk ? 'upload: ' + fileName + ' (' + chunkPaths.length + ' chunks)' : 'upload: ' + fileName;
-        const commitRes = await api('/repos/' + owner + '/' + repo + '/git/commits', 'POST', {
-            message: commitMsg,
-            tree: treeData.sha,
-            parents: [refData.object.sha]
-        });
-
-        updateFileProgress(index, 90, 'uploading');
-        $('actionInfo').textContent = fileName + ': 更新分支...';
-        await api('/repos/' + owner + '/' + repo + '/git/refs/heads/' + branch, 'PATCH', {
-            sha: commitRes.sha,
-            force: false
-        });
-
-        updateFileProgress(index, 100, 'done');
-        toast('\u2705 ' + fileName + ' 上传成功');
     } catch (e) {
         updateFileProgress(index, files[index].progress, 'error', e.message);
-        toast('\u274C ' + fileName + ' 上传失败: ' + e.message, '#f44336');
+        toast('上传失败 ' + fileName + ': ' + e.message, '#f44336');
     }
+    $('actionInfo').textContent = '';
 }
 
 $('uploadBtn').addEventListener('click', async function() {
@@ -327,15 +307,14 @@ $('uploadBtn').addEventListener('click', async function() {
     if (files.some(f => f.status === 'uploading')) { toast('已有文件正在上传'); return; }
 
     this.disabled = true;
-    $('actionInfo').textContent = '准备上传...';
 
     for (let i = 0; i < files.length; i++) {
         if (files[i].status === 'done') continue;
         await uploadFile(files[i], i);
     }
 
-    $('actionInfo').textContent = '所有文件处理完毕';
     this.disabled = false;
+    $('actionInfo').textContent = '所有文件处理完毕';
 });
 
 window.addEventListener('DOMContentLoaded', function() {

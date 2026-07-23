@@ -3,8 +3,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const WEBD_DIR = 'webd';
-const CHUNK_SIZE = 90 * 1024 * 1024;
-const TOLERANCE = 10 * 1024 * 1024;
+const CHUNK_SIZE = 20 * 1024 * 1024;
+const TOLERANCE = 5 * 1024 * 1024;
 const CHUNK_PATTERN = /^(.*)\.(\d{4})$/;
 
 const mimeMap = {

@@ -3,8 +3,8 @@ const CONFIG = {
     repo: 'github-webd',
     branch: 'main',
     webdPrefix: 'webd',
-    chunkThreshold: 90 * 1024 * 1024,
-    chunkTolerance: 10 * 1024 * 1024,
+    chunkThreshold: 20 * 1024 * 1024,
+    chunkTolerance: 5 * 1024 * 1024,
     nodes: [
         { name: 'gh.llkk.cc', type: '\u9ED8\u8BA4' },
         { name: 'github.tbedu.top', type: '\u8D21\u732E' },
