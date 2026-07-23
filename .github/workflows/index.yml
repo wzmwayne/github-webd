@@ -1,0 +1,25 @@
+name: Build Index
+on:
+  push:
+    paths: ["webd/**"]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate index.json
+        run: node .github/scripts/generate-index.js
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.json
+          git diff --staged --quiet || git commit -m "update index [skip ci]"
+          git push

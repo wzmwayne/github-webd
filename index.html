@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebD Cloud</title>
+<script src="config.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,-apple-system,sans-serif}
+body{display:flex;height:100vh;background:#f5f5f5}
+#sidebar{width:320px;min-width:320px;background:#fff;border-right:1px solid #ddd;display:flex;flex-direction:column}
+#sidebar h2{padding:16px;font-size:18px;border-bottom:1px solid #eee}
+#tree{flex:1;overflow-y:auto;padding:8px 0}
+.tree-item{padding:6px 16px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:14px;user-select:none}
+.tree-item:hover{background:#f0f0f0}
+.tree-item.selected{background:#e3f2fd;font-weight:600}
+.tree-item .icon{width:20px;text-align:center;flex-shrink:0}
+.tree-children{padding-left:24px}
+.tree-leaf{padding:6px 16px 6px 40px;cursor:pointer;font-size:14px;display:flex;align-items:center;gap:6px}
+.tree-leaf:hover{background:#f0f0f0}
+.tree-leaf.selected{background:#e3f2fd}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#toolbar{padding:12px 20px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#toolbar .path{font-size:14px;color:#666;flex:1;min-width:100px}
+#proxyZone{display:flex;align-items:center;gap:8px;font-size:13px}
+#proxyZone select{padding:4px 8px;border:1px solid #ccc;border-radius:4px;max-width:260px}
+#proxyZone button{padding:4px 12px;border:1px solid #1976d2;background:#1976d2;color:#fff;border-radius:4px;cursor:pointer;font-size:13px}
+#proxyZone button:hover{background:#1565c0}
+#proxyStatus{font-size:12px;color:#666}
+#content{flex:1;overflow:auto;margin:0}
+table{width:100%;border-collapse:collapse;background:#fff}
+th{text-align:left;padding:10px 16px;font-size:13px;color:#666;border-bottom:2px solid #eee;font-weight:600;position:sticky;top:0;background:#fff}
+td{padding:8px 16px;font-size:14px;border-bottom:1px solid #f0f0f0}
+tr:hover td{background:#fafafa}
+.name-cell{display:flex;align-items:center;gap:8px}
+.name-cell .icon{width:24px;text-align:center;font-size:16px}
+.size-cell{white-space:nowrap;color:#666}
+.time-cell{white-space:nowrap;color:#666;font-size:13px}
+.actions-cell{white-space:nowrap}
+.actions-cell button{padding:4px 12px;border:1px solid #1976d2;background:#fff;color:#1976d2;border-radius:4px;cursor:pointer;font-size:12px;margin:1px}
+.actions-cell button:hover{background:#e3f2fd}
+.actions-cell button.primary{border-color:#4caf50;color:#4caf50}
+.actions-cell button.primary:hover{background:#e8f5e9}
+.flag-cell{font-size:12px;color:#f44336}
+.empty{padding:40px;text-align:center;color:#999;font-size:15px}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#323232;color:#fff;padding:12px 24px;border-radius:6px;font-size:14px;z-index:9999;display:none;max-width:80vw}
+</style>
+</head>
+<body>
+<div id="sidebar">
+    <h2>&#x1F4C1; WebD Cloud</h2>
+    <div id="tree"></div>
+</div>
+<div id="main">
+    <div id="toolbar">
+        <span class="path" id="currentPath">/</span>
+        <div id="proxyZone">
+            <select id="proxySelect"></select>
+            <button id="speedTestBtn">&#x26A1; 测速</button>
+            <span id="proxyStatus"></span>
+        </div>
+    </div>
+    <div id="content">
+        <table id="fileTable">
+            <thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
+            <tbody id="fileBody"></tbody>
+        </table>
+        <div class="empty" id="emptyHint" style="display:none">此目录为空</div>
+    </div>
+</div>
+<div id="toast"></div>
+
+<script>
+let indexData = [];
+let treeData = null;
+let currentNode = '';
+let selectedProxy = '';
+
+function toast(msg, duration) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, duration || 3000);
+}
+
+function formatSize(bytes) {
+    if (!bytes) return '-';
+    const units = ['B','KB','MB','GB','TB'];
+    let i = 0;
+    let size = bytes;
+    while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+    return size.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+}
+
+function formatTime(iso) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+function getFileIcon(entry) {
+    if (entry.type === 'merged') return '\uD83D\uDCC1';
+    if (entry.type === 'chunk') return '\uD83E\uDEA5';
+    const ext = entry.path.split('.').pop().toLowerCase();
+    const img = ['jpg','jpeg','png','gif','webp','bmp','ico','svg'];
+    const vid = ['mp4','avi','mkv','mov','webm'];
+    const aud = ['mp3','wav','ogg','flac'];
+    const arch = ['zip','rar','7z','tar','gz','iso'];
+    if (ext === 'folder') return '\uD83D\uDCC1';
+    if (img.includes(ext)) return '\uD83D\uDDBC';
+    if (vid.includes(ext)) return '\uD83C\uDFA5';
+    if (aud.includes(ext)) return '\uD83C\uDFB5';
+    if (arch.includes(ext)) return '\uD83D\uDCE6';
+    if (['pdf'].includes(ext)) return '\uD83D\uDCC4';
+    if (['txt','md','csv','xml','json','js','html','css'].includes(ext)) return '\uD83D\uDCDD';
+    return '\uD83D\uDCC4';
+}
+
+function buildTree(entries) {
+    const root = { name: '', children: {}, files: [], path: '' };
+    for (const e of entries) {
+        if (e.type === 'chunk') continue;
+        const parts = e.path.split('/');
+        let node = root;
+        for (let i = 0; i < parts.length - 1; i++) {
+            if (!node.children[parts[i]]) {
+                node.children[parts[i]] = { name: parts[i], children: {}, files: [], path: parts.slice(0, i+1).join('/') };
+            }
+            node = node.children[parts[i]];
+        }
+        node.files.push(e);
+    }
+    return root;
+}
+
+function renderTree() {
+    const container = document.getElementById('tree');
+    container.innerHTML = '';
+    renderTreeNode(container, treeData, '');
+}
+
+function renderTreeNode(parentEl, node, prefix) {
+    const dirs = Object.keys(node.children).sort();
+    for (const dirName of dirs) {
+        const child = node.children[dirName];
+        const item = document.createElement('div');
+        item.className = 'tree-item' + (currentNode === child.path ? ' selected' : '');
+        item.innerHTML = '<span class="icon">\u25B6</span><span>' + dirName + '</span>';
+        item._dirNode = child;
+        item._childrenContainer = document.createElement('div');
+        item._childrenContainer.className = 'tree-children';
+        item._childrenContainer.style.display = 'none';
+        item._expanded = false;
+
+        item.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (!this._expanded) {
+                this._expanded = true;
+                this.querySelector('.icon').textContent = '\u25BC';
+                this._childrenContainer.style.display = '';
+                if (this._childrenContainer.children.length === 0) {
+                    renderTreeNode(this._childrenContainer, this._dirNode, child.path + '/');
+                }
+            } else {
+                this._expanded = false;
+                this.querySelector('.icon').textContent = '\u25B6';
+                this._childrenContainer.style.display = 'none';
+            }
+            currentNode = child.path;
+            document.querySelectorAll('.tree-item.selected, .tree-leaf.selected').forEach(el => el.classList.remove('selected'));
+            this.classList.add('selected');
+            renderTable();
+        });
+        parentEl.appendChild(item);
+        parentEl.appendChild(item._childrenContainer);
+    }
+
+    for (const f of node.files) {
+        const leaf = document.createElement('div');
+        leaf.className = 'tree-leaf' + (currentNode === f.path ? ' selected' : '');
+        leaf.innerHTML = '<span class="icon">' + getFileIcon(f) + '</span><span>' + f.path.split('/').pop() + '</span>';
+        leaf.addEventListener('click', function(e) {
+            e.stopPropagation();
+            currentNode = f.path;
+            document.querySelectorAll('.tree-item.selected, .tree-leaf.selected').forEach(el => el.classList.remove('selected'));
+            this.classList.add('selected');
+            renderTable();
+        });
+        parentEl.appendChild(leaf);
+    }
+}
+
+function renderTable() {
+    const tbody = document.getElementById('fileBody');
+    const emptyHint = document.getElementById('emptyHint');
+    tbody.innerHTML = '';
+
+    const entries = [];
+
+    if (currentNode === '' || currentNode === null) {
+        for (const dirName of Object.keys(treeData.children).sort()) {
+            entries.push({ path: dirName, _isDir: true, size: 0, mtime: '' });
+        }
+        for (const f of treeData.files) {
+            if (f.type !== 'chunk') entries.push(f);
+        }
+    } else if (treeData) {
+        const parts = currentNode.split('/');
+        let node = treeData;
+        for (const p of parts) {
+            if (node.children[p]) node = node.children[p];
+            else break;
+        }
+        for (const dirName of Object.keys(node.children).sort()) {
+            entries.push({ path: currentNode + '/' + dirName, _isDir: true, _name: dirName, size: 0, mtime: '' });
+        }
+        for (const f of node.files) {
+            if (f.type !== 'chunk') {
+                entries.push({ ...f, _name: f.path.split('/').pop() });
+            }
+        }
+    }
+
+    entries.sort((a, b) => {
+        if (a._isDir && !b._isDir) return -1;
+        if (!a._isDir && b._isDir) return 1;
+        return (a._name || a.path).localeCompare(b._name || b.path);
+    });
+
+    if (entries.length === 0) {
+        emptyHint.style.display = '';
+        return;
+    }
+    emptyHint.style.display = 'none';
+
+    for (const e of entries) {
+        const tr = document.createElement('tr');
+        if (e._isDir) {
+            const name = e._name || e.path.split('/').pop();
+            tr.innerHTML = '<td><div class="name-cell"><span class="icon">\uD83D\uDCC1</span>' + name + '</div></td><td class="size-cell">-</td><td class="time-cell">-</td><td class="actions-cell"></td>';
+            tr.style.cursor = 'pointer';
+            tr.addEventListener('click', function() {
+                currentNode = e.path;
+                document.querySelectorAll('.tree-item.selected, .tree-leaf.selected').forEach(el => el.classList.remove('selected'));
+                const treeItems = document.querySelectorAll('.tree-item');
+                for (const ti of treeItems) {
+                    if (ti._dirNode && ti._dirNode.path === e.path) {
+                        ti.click();
+                        return;
+                    }
+                }
+                document.getElementById('currentPath').textContent = '/' + currentNode;
+                renderTable();
+            });
+        } else {
+            const name = e._name || e.path.split('/').pop();
+            let flagHtml = '';
+            if (e.flag) flagHtml = '<span class="flag-cell"> [' + (e.msg || e.flag) + ']</span>';
+            const sizeCell = e.type === 'merged' ? formatSize(e.size) : formatSize(e.size);
+            const timeCell = formatTime(e.mtime);
+            const downloadBtn = e.type === 'merged' ? '<button class="primary" onclick="downloadMerged(\'' + e.path + '\')">\u2B07 下载</button>' : '<button class="primary" onclick="downloadSingle(\'' + e.path + '\')">\u2B07 下载</button>';
+            const linkBtn = '<button onclick="copyLink(\'' + e.path + '\')">\uD83D\uDCCB 链接</button>';
+            tr.innerHTML = '<td><div class="name-cell"><span class="icon">' + getFileIcon(e) + '</span>' + name + flagHtml + '</div></td><td class="size-cell">' + sizeCell + '</td><td class="time-cell">' + timeCell + '</td><td class="actions-cell">' + downloadBtn + linkBtn + '</td>';
+        }
+        tbody.appendChild(tr);
+    }
+
+    document.getElementById('currentPath').textContent = '/' + currentNode;
+}
+
+async function loadIndex() {
+    try {
+        const resp = await fetch('index.json?_t=' + Date.now());
+        const raw = await resp.json();
+        indexData = raw;
+        treeData = buildTree(indexData);
+        renderTree();
+        renderTable();
+    } catch (e) {
+        document.getElementById('fileBody').innerHTML = '<tr><td colspan="4" style="text-align:center;padding:40px;color:red;">加载 index.json 失败: ' + e.message + '</td></tr>';
+    }
+}
+
+async function fetchFileWithProxy(url) {
+    if (selectedProxy) {
+        return fetch('https://' + selectedProxy + '/' + url);
+    }
+    return fetch(url);
+}
+
+async function downloadSingle(filePath) {
+    const entry = indexData.find(e => e.path === filePath);
+    if (!entry) { toast('文件记录不存在'); return; }
+    const rawUrl = CONFIG.rawBase + filePath;
+    try {
+        toast('正在下载...');
+        const resp = await fetchFileWithProxy(rawUrl);
+        if (!resp.ok) { toast('下载失败: HTTP ' + resp.status); return; }
+        const blob = await resp.blob();
+        if (entry.sha256) {
+            const hash = await sha256Blob(blob);
+            if (hash !== entry.sha256) { toast('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash); return; }
+        }
+        saveBlob(blob, filePath.split('/').pop());
+        toast('下载完成');
+    } catch (e) {
+        toast('下载失败: ' + e.message);
+    }
+}
+
+async function downloadMerged(filePath) {
+    const entry = indexData.find(e => e.path === filePath);
+    if (!entry || !entry.chunks) { toast('分块文件记录不存在'); return; }
+    toast('正在下载分块文件 (' + entry.chunks.length + ' 块)...');
+    try {
+        const blobs = [];
+        for (let i = 0; i < entry.chunks.length; i++) {
+            const chunkPath = entry.chunks[i];
+            const rawUrl = CONFIG.rawBase + chunkPath;
+            toast('下载中: ' + (i + 1) + '/' + entry.chunks.length);
+            const resp = await fetchFileWithProxy(rawUrl);
+            if (!resp.ok) { toast('分块 ' + chunkPath + ' 下载失败: HTTP ' + resp.status); return; }
+            blobs.push(await resp.blob());
+        }
+        toast('正在拼接...');
+        const merged = new Blob(blobs);
+        if (entry.sha256) {
+            const hash = await sha256Blob(merged);
+            if (hash !== entry.sha256) { toast('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash); return; }
+        }
+        let dlName = filePath.split('/').pop();
+        saveBlob(merged, dlName);
+        toast('下载完成');
+    } catch (e) {
+        toast('拼接下载失败: ' + e.message);
+    }
+}
+
+async function sha256Blob(blob) {
+    const buf = await blob.arrayBuffer();
+    const hash = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+function copyLink(filePath) {
+    const entry = indexData.find(e => e.path === filePath);
+    if (!entry) { toast('文件记录不存在'); return; }
+    let url;
+    if (selectedProxy) {
+        url = CONFIG.buildProxyUrl(selectedProxy, filePath);
+    } else {
+        url = CONFIG.buildRawUrl(filePath);
+    }
+    navigator.clipboard.writeText(url).then(() => {
+        toast('链接已复制');
+    }).catch(() => {
+        toast('复制失败，请手动复制');
+    });
+}
+
+function initProxyZone() {
+    const sel = document.getElementById('proxySelect');
+    sel.innerHTML = '<option value="">直连 (无代理)</option>';
+    for (const n of CONFIG.nodes) {
+        const opt = document.createElement('option');
+        opt.value = n.name;
+        opt.textContent = '[' + n.type + '] ' + n.name;
+        sel.appendChild(opt);
+    }
+    sel.addEventListener('change', function() {
+        selectedProxy = this.value;
+    });
+
+    document.getElementById('speedTestBtn').addEventListener('click', startSpeedTest);
+}
+
+async function startSpeedTest() {
+    const btn = document.getElementById('speedTestBtn');
+    const status = document.getElementById('proxyStatus');
+    btn.disabled = true;
+    status.textContent = '测速中...';
+
+    const testUrl = 'https://raw.githubusercontent.com/' + CONFIG.owner + '/' + CONFIG.repo + '/refs/heads/main/test_file.dat?t=' + Date.now();
+    const concurrency = 20;
+    const timeout = 15000;
+    const results = [];
+
+    const testOne = (node) => {
+        return new Promise(resolve => {
+            const proxyUrl = 'https://' + node.name + '/' + testUrl;
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), timeout);
+            const start = performance.now();
+            fetch(proxyUrl, { signal: controller.signal })
+                .then(r => {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.arrayBuffer();
+                })
+                .then(buf => {
+                    clearTimeout(tid);
+                    const dur = performance.now() - start;
+                    const speed = (buf.byteLength / 1024) / (dur / 1000);
+                    resolve({ node: node.name, success: true, duration: dur, speed: speed });
+                })
+                .catch(err => {
+                    clearTimeout(tid);
+                    resolve({ node: node.name, success: false, error: err.name === 'AbortError' ? '超时' : err.message });
+                });
+        });
+    };
+
+    const all = CONFIG.nodes.map(n => () => testOne(n));
+
+    async function runBatch(tasks, limit) {
+        const results = [];
+        const executing = [];
+        for (const task of tasks) {
+            const p = task().then(r => { executing.splice(executing.indexOf(p), 1); return r; });
+            results.push(p);
+            executing.push(p);
+            if (executing.length >= limit) await Promise.race(executing);
+        }
+        return Promise.all(results);
+    }
+
+    const startAll = performance.now();
+    const res = await runBatch(all, concurrency);
+    const totalTime = ((performance.now() - startAll) / 1000).toFixed(1);
+
+    const successResults = res.filter(r => r.success);
+    successResults.sort((a, b) => b.speed - a.speed);
+
+    const sel = document.getElementById('proxySelect');
+    sel.innerHTML = '<option value="">直连 (无代理)</option>';
+    if (successResults.length > 0) {
+        for (const r of successResults) {
+            const opt = document.createElement('option');
+            opt.value = r.node;
+            opt.textContent = r.node + ' (' + r.speed.toFixed(2) + ' KB/s)';
+            sel.appendChild(opt);
+        }
+        sel.value = successResults[0].node;
+        selectedProxy = successResults[0].node;
+        status.textContent = '\u2705 完成 ' + totalTime + 's, 最快: ' + successResults[0].node + ' (' + successResults[0].speed.toFixed(2) + ' KB/s)';
+    } else {
+        status.textContent = '\u274C 所有节点不可用 (' + totalTime + 's)';
+    }
+    btn.disabled = false;
+}
+
+window.addEventListener('DOMContentLoaded', function() {
+    initProxyZone();
+    loadIndex();
+});
+</script>
+</body>
+</html>

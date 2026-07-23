@@ -1,0 +1,88 @@
+const CONFIG = {
+    owner: 'wzmwayne',
+    repo: 'github-webd',
+    branch: 'main',
+    webdPrefix: 'webd',
+    chunkThreshold: 90 * 1024 * 1024,
+    chunkTolerance: 10 * 1024 * 1024,
+    nodes: [
+        { name: 'gh.llkk.cc', type: '\u9ED8\u8BA4' },
+        { name: 'github.tbedu.top', type: '\u8D21\u732E' },
+        { name: 'ghfile.geekertao.top', type: '\u8D21\u732E' },
+        { name: 'ghproxy.net', type: '\u8D21\u732E' },
+        { name: 'gh-proxy.com', type: '\u8D21\u732E' },
+        { name: 'gh-proxy.net', type: '\u8D21\u732E' },
+        { name: 'cdn.gh-proxy.com', type: '\u8D21\u732E' },
+        { name: 'github.dpik.top', type: '\u8D21\u732E' },
+        { name: 'j.1lin.dpdns.org', type: '\u8D21\u732E' },
+        { name: 'github.starrlzy.cn', type: '\u8D21\u732E' },
+        { name: 'github-proxy.memory-echoes.cn', type: '\u8D21\u732E' },
+        { name: 'git.yylx.win', type: '\u8D21\u732E' },
+        { name: 'ghm.078465.xyz', type: '\u8D21\u732E' },
+        { name: 'gh.927223.xyz', type: '\u8D21\u732E' },
+        { name: 'ghf.\u65E0\u540D\u6C0F.top', type: '\u8D21\u732E' },
+        { name: 'gh.felicity.ac.cn', type: '\u8D21\u732E' },
+        { name: 'gh.bugdey.us.kg', type: '\u8D21\u732E' },
+        { name: 'cdn.akaere.online', type: '\u8D21\u732E' },
+        { name: 'gh.dpik.top', type: '\u8D21\u732E' },
+        { name: 'jiashu.1win.eu.org', type: '\u8D21\u732E' },
+        { name: 'tvv.tw', type: '\u8D21\u732E' },
+        { name: 'j.1win.ggff.net', type: '\u8D21\u732E' },
+        { name: 'gitproxy.127731.xyz', type: '\u8D21\u732E' },
+        { name: 'gh.inkchills.cn', type: '\u8D21\u732E' },
+        { name: 'gh.catmak.name', type: '\u8D21\u732E' },
+        { name: 'gh.b52m.cn', type: '\u8D21\u732E' },
+        { name: 'down.mxw.xx.kg', type: '\u8D21\u732E' },
+        { name: 'down.mxw.qzz.io', type: '\u8D21\u732E' },
+        { name: 'github.mxw.qzz.io', type: '\u8D21\u732E' },
+        { name: 'gh.acmsz.top', type: '\u8D21\u732E' },
+        { name: 'gh.jjj.gv.uy', type: '\u8D21\u732E' },
+        { name: 'githubdog.com', type: '\u8D21\u732E' },
+        { name: 'gh.meali.top', type: '\u8D21\u732E' },
+        { name: '777.z321.cc.cd', type: '\u8D21\u732E' },
+        { name: 'gg.z321.cc.cd', type: '\u8D21\u732E' },
+        { name: 'g.z321.cc.cd', type: '\u8D21\u732E' },
+        { name: 'slink.ltd', type: '\u6D4B\u7ED8' },
+        { name: 'github.tmby.shop', type: '\u6D4B\u7ED8' },
+        { name: 'ghpr.cc', type: '\u6D4B\u7ED8' },
+        { name: 'gh.tryxd.cn', type: '\u6D4B\u7ED8' },
+        { name: 'gitproxy.click', type: '\u6D4B\u7ED8' },
+        { name: 'github.chenc.dev', type: '\u6D4B\u7ED8' },
+        { name: 'gh.ddlc.top', type: '\u6D4B\u7ED8' },
+        { name: 'gitproxy.mrhjx.cn', type: '\u6D4B\u7ED8' },
+        { name: 'gh.sixyin.com', type: '\u6D4B\u7ED8' },
+        { name: 'gh.monlor.com', type: '\u6D4B\u7ED8' },
+        { name: 'ghpxy.hwinzniej.top', type: '\u6D4B\u7ED8' },
+        { name: 'git.669966.xyz', type: '\u6D4B\u7ED8' },
+        { name: 'ghfast.top', type: '\u6D4B\u7ED8' },
+        { name: 'gh.jasonzeng.dev', type: '\u6D4B\u7ED8' },
+        { name: 'github.geekery.cn', type: '\u6D4B\u7ED8' },
+        { name: 'gp.zkitefly.eu.org', type: '\u6D4B\u7ED8' },
+        { name: 'fastgit.cc', type: '\u6D4B\u7ED8' },
+        { name: 'ghproxy.1888866.xyz', type: '\u6D4B\u7ED8' },
+        { name: 'ghp.arslantu.xyz', type: '\u6D4B\u7ED8' },
+        { name: 'github.ednovas.xyz', type: '\u6D4B\u7ED8' },
+        { name: 'ghproxy.imciel.com', type: '\u6D4B\u7ED8' },
+        { name: 'ghproxy.cxkpro.top', type: '\u6D4B\u7ED8' },
+        { name: 'github.xxlab.tech', type: '\u6D4B\u7ED8' },
+        { name: 'gh.idayer.com', type: '\u6D4B\u7ED8' },
+        { name: 'free.cn.eu.org', type: '\u6D4B\u7ED8' },
+        { name: 'gh.chjina.com', type: '\u6D4B\u7ED8' },
+        { name: 'ghp.keleyaa.com', type: '\u6D4B\u7ED8' },
+        { name: 'proxy.yaoyaoling.net', type: '\u6D4B\u7ED8' },
+        { name: 'ghproxy.monkeyray.net', type: '\u6D4B\u7ED8' },
+        { name: 'gh.noki.icu', type: '\u6D4B\u7ED8' },
+        { name: 'g.blfrp.cn', type: '\u6D4B\u7ED8' }
+    ]
+};
+
+CONFIG.rawBase = 'https://raw.githubusercontent.com/' + CONFIG.owner + '/' + CONFIG.repo + '/' + CONFIG.branch + '/';
+
+CONFIG.buildProxyUrl = function (nodeName, filePath) {
+    return 'https://' + nodeName + '/' + CONFIG.rawBase + CONFIG.webdPrefix + '/' + filePath;
+};
+
+CONFIG.buildRawUrl = function (filePath) {
+    return CONFIG.rawBase + CONFIG.webdPrefix + '/' + filePath;
+};
+
