@@ -1,6 +1,6 @@
 const CONFIG = {
-    owner: 'wzmwayne',
-    repo: 'github-webd',
+    owner: 'YOUR_USERNAME',
+    repo: 'YOUR_REPO',
     branch: 'main',
     webdPrefix: 'webd',
     chunkThreshold: 20 * 1024 * 1024,
