@@ -1,62 +1,42 @@
 # WebD Cloud
 
-基于 GitHub Pages 与 GitHub Actions 的自托管文件网盘。
-
-## 功能
-
-- 文件浏览：树形目录导航，文件列表表格展示
-- 文件下载：单文件流式下载或分块文件多线程并行下载，SHA256 完整性校验
-- 代理测速：内置 67 个 gh-proxy 节点，20 线程并发测速
-- 文件上传：拖拽或点击上传，超过 20MB 自动分块，支持多级目录
-- 索引构建：GitHub Actions 每日 07:00 或手动触发，自动计算 SHA256 并生成 index.json
+基于 GitHub Pages + GitHub Actions 的自托管文件网盘。
 
 ## 文件结构
 
 ```
 仓库根目录/
-├── index.html              # 文件浏览（树形 + 表格）
-├── download.html           # 文件下载（测速 + 并行下载 + SHA256）
-├── update.html             # 文件上传（拖拽 + 分块 + 路径选择）
+├── index.html              # 文件浏览（目录导航 + 双源索引）
+├── download.html           # 下载（测速 + 分块并行 + SHA256 校验）
+├── update.html             # 上传（拖拽 + 20MB 分块 + PAT 加密）
 ├── config.js               # 配置文件
 ├── index.json              # 自动生成的文件索引
-├── test_file.dat           # 代理测速测试文件
+├── test_file.dat           # 代理测速文件
 ├── .github/
 │   ├── workflows/
-│   │   └── index.yml       # 索引构建工作流（仅手动/定时）
+│   │   └── index.yml       # 索引构建（手动 / 定时 07:00）
 │   └── scripts/
-│       └── generate-index.js  # 索引生成脚本
-└── webd/                   # 文件存储目录
+│       └── generate-index.js
+└── webd/                   # 文件存放目录
 ```
 
-## 配置
+## 快速开始
 
-编辑 `config.js`，修改以下参数：
+Fork [`forkme`](https://github.com/wzmwayne/github-webd/tree/forkme) 分支，该分支不包含任何数据文件和索引，开箱即用。
 
-```javascript
-const CONFIG = {
-    owner: '你的GitHub用户名',
-    repo: '你的仓库名',
-    branch: 'main',
-    webdPrefix: 'webd',
-    chunkThreshold: 90 * 1024 * 1024,  // 分块阈值 90MB
-    // ...
-};
-```
+1. 修改 `config.js` 中的 `owner` 和 `repo`
+2. 启用 GitHub Pages（Branch: `main`, folder: `/`）
+3. 推送后手动触发 Actions 工作流 `index.yml` 生成索引
+4. 访问 `update.html`，输入 PAT 上传文件
 
-## 部署
+## 功能
 
-1. Fork 或创建此仓库
-2. 修改 `config.js` 中的 owner 和 repo
-3. 启用 GitHub Pages（Source: Deploy from branch `main`, root `/`）
-4. 将文件放入 `webd/` 目录，推送后 Actions 自动生成索引
-
-## 上传文件
-
-访问 `update.html`，输入 GitHub Personal Access Token（需 repo 权限），拖拽或选择文件上传。超过 90MB 的文件自动分块。
-
-## 加速节点
-
-项目内置了 gh-proxy 节点列表，在文件浏览页面可测速并选择最快节点。下载和链接均使用选中节点加速。
+| 功能 | 说明 |
+|------|------|
+| 文件浏览 | 目录导航 + 上级返回，双源索引（Pages CDN / GitHub raw 自动比对） |
+| 文件上传 | 拖拽上传，>20MB 自动分块，单线程稳定上传，PAT 加密存储 |
+| 文件下载 | gh-proxy 节点 20 线程测速，分块文件 5 线程并行下载 + SHA256 校验 |
+| 索引构建 | GitHub Actions 自动扫描 webd/，检测分块组，计算 SHA256，处理冲突 |
 
 ## License
 
