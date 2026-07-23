@@ -292,7 +292,14 @@ function blobToBase64(blob) {
 }
 
 async function uploadViaContents(filePath, contentBase64, message) {
-    return await api('/repos/' + owner + '/' + repo + '/contents/' + filePath, 'PUT', { message: message, content: contentBase64, branch: branch });
+    let sha;
+    try {
+        const existing = await api('/repos/' + owner + '/' + repo + '/contents/' + filePath, 'GET');
+        sha = existing.sha;
+    } catch (e) {}
+    const body = { message: message, content: contentBase64, branch: branch };
+    if (sha) body.sha = sha;
+    return await api('/repos/' + owner + '/' + repo + '/contents/' + filePath, 'PUT', body);
 }
 
 async function uploadFile(fileObj, index) {
