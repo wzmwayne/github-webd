@@ -29,7 +29,7 @@ h1{font-size:22px;margin-bottom:20px;color:#333}
 #progress .bar-wrap{flex:1;height:8px;background:#eee;border-radius:4px;overflow:hidden}
 #progress .bar-fill{height:100%;background:#4caf50;border-radius:4px;width:0%;transition:width .3s}
 #progress .pct{font-size:13px;color:#666;min-width:40px;text-align:right}
-#progress .detail{font-size:12px;color:#888;margin-top:4px}
+#progress .detail{font-size:12px;color:#888;margin-top:4px;white-space:pre-line}
 #status{margin-bottom:16px;padding:12px 16px;border-radius:6px;font-size:14px;display:none}
 #status.ok{display:block;background:#e8f5e9;color:#2e7d32}
 #status.err{display:block;background:#ffebee;color:#c62828}
@@ -299,48 +299,134 @@ async function doDownload() {
     setStatus('', '');
     showProgress(0, '准备中...');
     downloadStartTs = performance.now();
+    const MAX_RETRY = 3;
 
     const fileName = entry.path.split('/').pop();
     log('======== 开始下载: ' + fileName + ' ========', 'info');
     log('类型: ' + entry.type + ', 大小: ' + formatSize(entry.size) + ' (' + entry.size + ' 字节)', 'info');
     log('下载源: ' + (selectedProxy ? '代理 ' + selectedProxy : '直连 raw'), 'info');
 
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    async function fetchWithRetry(url, retries) {
+        let lastErr;
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+                return resp;
+            } catch (e) {
+                lastErr = e;
+                log('请求失败 (第' + attempt + '/' + retries + '次): ' + e.message, 'warn');
+                if (attempt < retries) {
+                    const wait = attempt * 1500;
+                    log('  ' + (wait / 1000).toFixed(1) + 's 后重试: ' + url, 'info');
+                    await sleep(wait);
+                }
+            }
+        }
+        throw lastErr;
+    }
+
     try {
         if (entry.type === 'merged') {
             const chunks = entry.chunks;
             const total = chunks.length;
-            const blobs = [];
-            let completed = 0;
-            log('分块文件: 共 ' + total + ' 块, 每块 ' + formatSize(entry.chunkSize || 0), 'info');
-
-            const tasks = chunks.map((chunkPath, i) => async () => {
-                const url = buildFileUrl(chunkPath);
-                const t0 = performance.now();
-                log('开始分块 ' + (i + 1) + '/' + total + ': ' + url, 'info');
-                const resp = await fetch(url);
-                if (!resp.ok) throw new Error('分块 ' + chunkPath + ' 失败: HTTP ' + resp.status);
-                const cl = resp.headers.get('content-length');
-                const blob = await resp.blob();
-                const dur = Math.round(performance.now() - t0);
-                const speed = blob.size > 0 ? (blob.size / 1024) / (dur / 1000) : 0;
-                log('分块 ' + (i + 1) + '/' + total + ' 完成: HTTP ' + resp.status + ', ' + formatSize(blob.size) + (cl ? ' (header ' + formatSize(parseInt(cl, 10)) + ')' : '') + ', ' + dur + 'ms, ' + speed.toFixed(1) + ' KB/s', 'ok');
-                blobs[i] = blob;
-                completed++;
-                const pct = Math.round((completed / total) * 100);
-                showProgress(pct, '已下载 ' + completed + '/' + total + ' 块');
-            });
-
+            const blobs = new Array(total);
+            const recvBytes = new Array(total).fill(0);
+            const expBytes = new Array(total).fill(0);
+            const chunkSize = entry.chunkSize || Math.ceil(entry.size / total);
             const concurrency = 5;
-            log('并发下载: ' + concurrency + ' 线程', 'info');
-            const exec = [];
-            for (const t of tasks) {
-                const p = t().then(r => { exec.splice(exec.indexOf(p), 1); return r; });
-                exec.push(p);
-                if (exec.length >= concurrency) await Promise.race(exec);
-            }
-            await Promise.all(exec);
+            let aborted = false;
+            let lastRender = 0;
 
-            const totalBlobSize = blobs.reduce((s, b) => s + b.size, 0);
+            log('分块文件: 共 ' + total + ' 块, 每块 ' + formatSize(chunkSize), 'info');
+            log('并发下载: ' + concurrency + ' 线程, 失败自动重试 ' + MAX_RETRY + ' 次', 'info');
+
+            function renderChunkProgress(force) {
+                const now = Date.now();
+                if (!force && now - lastRender < 100) return;
+                lastRender = now;
+                const sum = recvBytes.reduce((s, v) => s + v, 0);
+                const lines = [];
+                for (let i = 0; i < total; i++) {
+                    const exp = expBytes[i] || chunkSize;
+                    const done = blobs[i] ? ' ✓' : '';
+                    lines.push('块 ' + (i + 1) + '/' + total + ': ' + formatSize(recvBytes[i]) + ' / ' + formatSize(exp) + done);
+                }
+                const pct = Math.min(99, Math.round((sum / entry.size) * 100));
+                showProgress(pct, '合计: ' + formatSize(sum) + ' / ' + formatSize(entry.size) + ' (' + pct + '%)\n' + lines.join('\n'));
+            }
+
+            async function fetchChunk(chunkPath, i) {
+                const url = buildFileUrl(chunkPath);
+                for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+                    if (aborted) throw new Error('已中止');
+                    try {
+                        log('开始分块 ' + (i + 1) + '/' + total + (attempt > 1 ? ' (第' + attempt + '次)' : '') + ': ' + url, 'info');
+                        const t0 = performance.now();
+                        const resp = await fetch(url);
+                        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                        const cl = resp.headers.get('content-length');
+                        const expected = parseInt(cl, 10) || chunkSize;
+                        expBytes[i] = expected;
+                        let parts = [];
+                        let received = 0;
+                        if (resp.body && resp.body.getReader) {
+                            const reader = resp.body.getReader();
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                parts.push(value);
+                                received += value.length;
+                                recvBytes[i] = received;
+                                renderChunkProgress();
+                            }
+                        } else {
+                            const blob = await resp.blob();
+                            received = blob.size;
+                            parts = [blob];
+                            recvBytes[i] = received;
+                        }
+                        const blob = new Blob(parts);
+                        const dur = Math.round(performance.now() - t0);
+                        const speed = blob.size > 0 ? (blob.size / 1024) / (dur / 1000) : 0;
+                        blobs[i] = blob;
+                        log('分块 ' + (i + 1) + '/' + total + ' 完成: HTTP ' + resp.status + ', ' + formatSize(blob.size) + (cl ? ' (header ' + formatSize(expected) + ')' : '') + ', ' + dur + 'ms, ' + speed.toFixed(1) + ' KB/s', 'ok');
+                        renderChunkProgress(true);
+                        return;
+                    } catch (e) {
+                        recvBytes[i] = 0;
+                        renderChunkProgress(true);
+                        log('分块 ' + (i + 1) + '/' + total + ' 第' + attempt + '/' + MAX_RETRY + '次失败: ' + e.message, 'warn');
+                        if (attempt < MAX_RETRY) {
+                            const wait = attempt * 1500;
+                            log('  ' + (wait / 1000).toFixed(1) + 's 后重试分块 ' + (i + 1), 'info');
+                            await sleep(wait);
+                        } else {
+                            throw new Error('分块 ' + chunkPath + ' 重试' + MAX_RETRY + '次仍失败: ' + e.message);
+                        }
+                    }
+                }
+            }
+
+            let nextIdx = 0;
+            async function worker() {
+                while (!aborted && nextIdx < total) {
+                    const i = nextIdx++;
+                    try {
+                        await fetchChunk(chunks[i], i);
+                    } catch (e) {
+                        aborted = true;
+                        throw e;
+                    }
+                }
+            }
+
+            const workers = Array.from({ length: Math.min(concurrency, total) }, function() { return worker(); });
+            await Promise.all(workers);
+
+            const totalBlobSize = blobs.reduce(function(s, b) { return s + (b ? b.size : 0); }, 0);
             log('全部分块下载完成: 合计 ' + formatSize(totalBlobSize), 'ok');
             if (totalBlobSize !== entry.size) log('警告: 分块合计大小 ' + totalBlobSize + ' ≠ 索引大小 ' + entry.size, 'warn');
 
@@ -371,10 +457,10 @@ async function doDownload() {
             log('保存触发完成, 总耗时 ' + Math.round((performance.now() - downloadStartTs) / 1000) + 's', 'ok');
         } else {
             const url = buildFileUrl(entry.path);
-            showProgress(10, '下载中...');
+            showProgress(5, '下载中 (第1次尝试)...');
             log('普通文件下载: ' + url, 'info');
             const t0 = performance.now();
-            const resp = await fetch(url);
+            const resp = await fetchWithRetry(url, MAX_RETRY);
             if (!resp.ok) {
                 setStatus('下载失败: HTTP ' + resp.status, 'err');
                 log('HTTP 错误: ' + resp.status + ' ' + resp.statusText, 'err');
@@ -396,7 +482,7 @@ async function doDownload() {
                 received += value.length;
                 const pct = Math.round((received / contentLength) * 90);
                 if (pct !== lastPct) {
-                    showProgress(pct, formatSize(received) + ' / ' + formatSize(contentLength));
+                    showProgress(pct, '已下载 ' + formatSize(received) + ' / ' + formatSize(contentLength));
                     lastPct = pct;
                 }
             }
