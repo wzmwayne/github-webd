@@ -22,6 +22,13 @@ h1{font-size:22px;margin-bottom:20px;color:#333}
 #threadZone{display:flex;align-items:center;gap:6px}
 #threadZone label{font-size:13px;color:#666}
 #threadZone input{width:60px;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:13px}
+#speedTestBox{display:none;background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:16px}
+#speedTestBox .row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+#speedTestBox .row .lbl{font-size:13px;color:#555;min-width:80px}
+#speedTestBox .bar-wrap{flex:1;height:8px;background:#eee;border-radius:4px;overflow:hidden}
+#speedTestBox .bar-fill{height:100%;background:#1976d2;border-radius:4px;width:0%;transition:width .3s}
+#speedTestBox .pct{font-size:13px;color:#666;min-width:40px;text-align:right}
+#speedTestBox .detail{font-size:12px;color:#888;margin-top:4px;white-space:pre-line;max-height:240px;overflow:auto}
 #actions{margin-bottom:16px}
 #actions button{padding:12px 36px;background:#4caf50;color:#fff;border:none;border-radius:6px;font-size:16px;cursor:pointer}
 #actions button:hover{background:#388e3c}
@@ -59,6 +66,15 @@ h1{font-size:22px;margin-bottom:20px;color:#333}
     <button id="speedTestBtn">测速</button>
     <span id="proxyStatus"></span>
     <span id="threadZone"><label for="threadInput">线程</label><input type="number" id="threadInput" min="1" max="20" value="5"></span>
+</div>
+
+<div id="speedTestBox">
+    <div class="row">
+        <span class="lbl">测速进度</span>
+        <div class="bar-wrap"><div class="bar-fill" id="stBar"></div></div>
+        <span class="pct" id="stPct">0%</span>
+    </div>
+    <div class="detail" id="stDetail"></div>
 </div>
 
 <div id="actions">
@@ -214,20 +230,74 @@ async function startSpeedTest() {
     const testUrl = CONFIG.rawBase + 'test_file.dat?t=' + Date.now();
     const concurrency = 20;
     const timeout = 15000;
-    log('开始测速: ' + CONFIG.nodes.length + ' 节点, 并发 ' + concurrency + ', 超时 ' + timeout + 'ms', 'info');
+    const nodes = CONFIG.nodes;
+    const TEST_SIZE = 2 * 1024 * 1024;
+    const nodeRecv = new Array(nodes.length).fill(0);
+    const nodeTotal = new Array(nodes.length).fill(0);
+    const nodeDone = new Array(nodes.length).fill(false);
+    let lastRender = 0;
+    const box = $('speedTestBox');
+    box.style.display = 'block';
+
+    log('开始测速: ' + nodes.length + ' 节点, 并发 ' + concurrency + ', 超时 ' + timeout + 'ms', 'info');
     log('测速 URL: ' + testUrl, 'info');
 
-    const testOne = (node) => new Promise(resolve => {
+    function renderST(force) {
+        const now = Date.now();
+        if (!force && now - lastRender < 100) return;
+        lastRender = now;
+        let sum = 0;
+        let done = 0;
+        let target = 0;
+        for (let i = 0; i < nodes.length; i++) {
+            sum += nodeRecv[i];
+            if (nodeDone[i]) done++;
+            target += nodeTotal[i] || TEST_SIZE;
+        }
+        const pct = target > 0 ? Math.min(100, Math.round((sum / target) * 100)) : 0;
+        const bar = $('stBar');
+        if (bar) bar.style.width = pct + '%';
+        const pl = $('stPct');
+        if (pl) pl.textContent = pct + '%';
+        const lines = [];
+        for (let i = 0; i < nodes.length; i++) {
+            const t = nodeTotal[i] || TEST_SIZE;
+            const mark = nodeDone[i] ? (nodeRecv[i] >= t ? ' ✓' : ' ✗') : '';
+            lines.push(nodes[i].name + ': ' + formatSize(nodeRecv[i]) + ' / ' + formatSize(t) + mark);
+        }
+        lines.push('已完成 ' + done + '/' + nodes.length + ' 个节点');
+        const el = $('stDetail');
+        if (el) el.textContent = lines.join('\n');
+    }
+
+    const testOne = (node, idx) => new Promise(resolve => {
         const proxyUrl = 'https://' + node.name + '/' + testUrl;
         const controller = new AbortController();
         const tid = setTimeout(() => controller.abort(), timeout);
         const start = performance.now();
         fetch(proxyUrl, { signal: controller.signal })
-            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
-            .then(buf => {
+            .then(r => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const cl = r.headers.get('content-length');
+                if (cl) nodeTotal[idx] = parseInt(cl, 10);
+                const reader = r.body.getReader();
+                let received = 0;
+                const step = () => reader.read().then(({ done, value }) => {
+                    if (done) return received;
+                    received += value.length;
+                    nodeRecv[idx] = received;
+                    renderST();
+                    return step();
+                });
+                return step();
+            })
+            .then(size => {
                 clearTimeout(tid);
                 const dur = performance.now() - start;
-                const speed = (buf.byteLength / 1024) / (dur / 1000);
+                const speed = (size / 1024) / (dur / 1000);
+                nodeDone[idx] = true;
+                nodeRecv[idx] = size;
+                renderST(true);
                 const r = { node: node.name, success: true, duration: dur, speed: speed };
                 log('[测速] ' + node.name + ' 成功: ' + speed.toFixed(2) + ' KB/s (' + Math.round(dur) + 'ms)', 'ok');
                 resolve(r);
@@ -235,13 +305,15 @@ async function startSpeedTest() {
             .catch(err => {
                 clearTimeout(tid);
                 const errMsg = err.name === 'AbortError' ? '超时' : err.message;
+                nodeDone[idx] = true;
+                renderST(true);
                 const r = { node: node.name, success: false, error: errMsg, duration: performance.now() - start };
                 log('[测速] ' + node.name + ' 失败: ' + errMsg + ' (' + Math.round(r.duration) + 'ms)', 'warn');
                 resolve(r);
             });
     });
 
-    const tasks = CONFIG.nodes.map(n => () => testOne(n));
+    const tasks = nodes.map((n, idx) => () => testOne(n, idx));
     async function runBatch(tasks, limit) { const results = []; const exec = []; for (const t of tasks) { const p = t().then(r => { exec.splice(exec.indexOf(p), 1); return r; }); results.push(p); exec.push(p); if (exec.length >= limit) await Promise.race(exec); } return Promise.all(results); }
 
     const t0 = performance.now();
