@@ -228,12 +228,16 @@ async function startSpeedTest() {
                 clearTimeout(tid);
                 const dur = performance.now() - start;
                 const speed = (buf.byteLength / 1024) / (dur / 1000);
-                resolve({ node: node.name, success: true, duration: dur, speed: speed });
+                const r = { node: node.name, success: true, duration: dur, speed: speed };
+                log('[测速] ' + node.name + ' 成功: ' + speed.toFixed(2) + ' KB/s (' + Math.round(dur) + 'ms)', 'ok');
+                resolve(r);
             })
             .catch(err => {
                 clearTimeout(tid);
                 const errMsg = err.name === 'AbortError' ? '超时' : err.message;
-                resolve({ node: node.name, success: false, error: errMsg, duration: performance.now() - start });
+                const r = { node: node.name, success: false, error: errMsg, duration: performance.now() - start };
+                log('[测速] ' + node.name + ' 失败: ' + errMsg + ' (' + Math.round(r.duration) + 'ms)', 'warn');
+                resolve(r);
             });
     });
 
@@ -246,9 +250,6 @@ async function startSpeedTest() {
     const success = res.filter(r => r.success).sort((a, b) => b.speed - a.speed);
     const fail = res.filter(r => !r.success);
     log('测速完成: ' + totalMs + 'ms, 成功 ' + success.length + ', 失败 ' + fail.length, success.length ? 'ok' : 'err');
-    for (const r of fail) log('  [失败] ' + r.node + ' - ' + r.error + ' (' + Math.round(r.duration) + 'ms)', 'warn');
-    for (const r of success.slice(0, 5)) log('  [成功] ' + r.node + ' - ' + r.speed.toFixed(2) + ' KB/s (' + Math.round(r.duration) + 'ms)', 'ok');
-    if (success.length > 5) log('  ... 其余 ' + (success.length - 5) + ' 个可用节点略', 'info');
     try { localStorage.setItem('proxySpeedTest', JSON.stringify({ timestamp: Date.now(), results: res })); } catch {}
 
     const sel = $('proxySelect');
