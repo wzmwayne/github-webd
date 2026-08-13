@@ -34,6 +34,15 @@ h1{font-size:22px;margin-bottom:20px;color:#333}
 #status.ok{display:block;background:#e8f5e9;color:#2e7d32}
 #status.err{display:block;background:#ffebee;color:#c62828}
 #status.wait{display:block;background:#fff8e1;color:#f57f17}
+#debugToggle{margin-bottom:16px;padding:6px 16px;border:1px solid #ccc;background:#fff;color:#666;border-radius:4px;cursor:pointer;font-size:13px}
+#debugToggle:hover{background:#f0f0f0}
+#debug{display:none;background:#1e1e1e;color:#d4d4d4;font-family:monospace;font-size:12px;padding:12px;border-radius:8px;margin-bottom:16px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+#debug .log-line{margin:0;padding:2px 0;border-bottom:1px solid #2a2a2a}
+#debug .log-line .ts{color:#888;margin-right:8px}
+#debug .log-line.info{color:#4fc3f7}
+#debug .log-line.ok{color:#81c784}
+#debug .log-line.warn{color:#ffb74d}
+#debug .log-line.err{color:#e57373}
 </style>
 </head>
 <body>
@@ -63,11 +72,29 @@ h1{font-size:22px;margin-bottom:20px;color:#333}
 
 <div id="status"></div>
 
+<button id="debugToggle">调试日志</button>
+<div id="debug"></div>
+
 <script>
 let entry = null;
 let selectedProxy = '';
+let downloadStartTs = null;
 
 function $(id) { return document.getElementById(id); }
+
+function log(msg, level) {
+    const ts = new Date().toTimeString().split(' ')[0];
+    const line = ts + ' ' + msg;
+    if (window.console && console.log) console.log('%c' + line, 'color:#4fc3f7');
+    const el = $('debug');
+    if (el) {
+        const div = document.createElement('div');
+        div.className = 'log-line ' + (level || 'info');
+        div.innerHTML = '<span class="ts">' + ts + '</span>' + msg.replace(/</g, '&lt;');
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+    }
+}
 
 function params() {
     const p = new URLSearchParams(location.search);
@@ -97,14 +124,28 @@ function setStatus(msg, type) {
 
 async function loadEntry() {
     const path = params().get('path');
-    if (!path) { $('info').innerHTML = '<div style="color:red">缺少 path 参数</div>'; return; }
+    if (!path) {
+        log('缺少 path 参数', 'err');
+        $('info').innerHTML = '<div style="color:red">缺少 path 参数</div>';
+        return;
+    }
+    log('请求索引: index.json?_t=' + Date.now(), 'info');
     try {
+        const t0 = performance.now();
         const resp = await fetch('index.json?_t=' + Date.now());
+        log('索引响应: HTTP ' + resp.status + ' (' + Math.round(performance.now() - t0) + 'ms, ' + (resp.headers.get('content-length') || '?') + 'B)', 'info');
         const data = await resp.json();
+        log('索引解析成功: ' + data.length + ' 条记录', 'ok');
         entry = data.find(e => e.path === path);
-        if (!entry) { $('info').innerHTML = '<div style="color:red">文件记录不存在</div>'; return; }
+        if (!entry) {
+            log('未找到记录: ' + path, 'err');
+            $('info').innerHTML = '<div style="color:red">文件记录不存在</div>';
+            return;
+        }
+        log('匹配记录: type=' + entry.type + ', size=' + formatSize(entry.size) + (entry.chunks ? ', chunks=' + entry.chunks.length : ''), 'ok');
         renderInfo();
     } catch (e) {
+        log('加载索引失败: ' + e.message, 'err');
         $('info').innerHTML = '<div style="color:red">加载索引失败: ' + e.message + '</div>';
     }
 }
@@ -139,7 +180,10 @@ function initProxyZone() {
             sel.appendChild(opt);
         }
         if (success.length > 0) { sel.value = success[0].node; selectedProxy = success[0].node; }
-        $('proxyStatus').textContent = '已缓存 ' + new Date(cached.timestamp).getHours() + ':' + String(new Date(cached.timestamp).getMinutes()).padStart(2,'0');
+        const t = new Date(cached.timestamp);
+        $('proxyStatus').textContent = '已缓存 ' + t.getHours() + ':' + String(t.getMinutes()).padStart(2,'0');
+        log('读取缓存测速结果: ' + cached.results.filter(r => r.success).length + ' 个可用节点（缓存于 ' + t.toLocaleString() + '）', 'info');
+        if (selectedProxy) log('自动选择缓存最快节点: ' + selectedProxy, 'ok');
     } else {
         sel.innerHTML = '<option value="">直连</option>';
         for (const n of CONFIG.nodes) {
@@ -148,8 +192,12 @@ function initProxyZone() {
             opt.textContent = '[' + n.type + '] ' + n.name;
             sel.appendChild(opt);
         }
+        log('无缓存测速结果，加载全部节点: ' + CONFIG.nodes.length + ' 个', 'info');
     }
-    sel.addEventListener('change', function() { selectedProxy = this.value; });
+    sel.addEventListener('change', function() {
+        selectedProxy = this.value;
+        log('切换代理: ' + (selectedProxy || '直连'), 'warn');
+    });
     $('speedTestBtn').addEventListener('click', startSpeedTest);
 }
 
@@ -162,6 +210,8 @@ async function startSpeedTest() {
     const testUrl = CONFIG.rawBase + 'test_file.dat?t=' + Date.now();
     const concurrency = 20;
     const timeout = 15000;
+    log('开始测速: ' + CONFIG.nodes.length + ' 节点, 并发 ' + concurrency + ', 超时 ' + timeout + 'ms', 'info');
+    log('测速 URL: ' + testUrl, 'info');
 
     const testOne = (node) => new Promise(resolve => {
         const proxyUrl = 'https://' + node.name + '/' + testUrl;
@@ -170,15 +220,31 @@ async function startSpeedTest() {
         const start = performance.now();
         fetch(proxyUrl, { signal: controller.signal })
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
-            .then(buf => { clearTimeout(tid); const dur = performance.now() - start; resolve({ node: node.name, success: true, duration: dur, speed: (buf.byteLength / 1024) / (dur / 1000) }); })
-            .catch(err => { clearTimeout(tid); resolve({ node: node.name, success: false, error: err.name === 'AbortError' ? '超时' : err.message }); });
+            .then(buf => {
+                clearTimeout(tid);
+                const dur = performance.now() - start;
+                const speed = (buf.byteLength / 1024) / (dur / 1000);
+                resolve({ node: node.name, success: true, duration: dur, speed: speed });
+            })
+            .catch(err => {
+                clearTimeout(tid);
+                const errMsg = err.name === 'AbortError' ? '超时' : err.message;
+                resolve({ node: node.name, success: false, error: errMsg, duration: performance.now() - start });
+            });
     });
 
     const tasks = CONFIG.nodes.map(n => () => testOne(n));
     async function runBatch(tasks, limit) { const results = []; const exec = []; for (const t of tasks) { const p = t().then(r => { exec.splice(exec.indexOf(p), 1); return r; }); results.push(p); exec.push(p); if (exec.length >= limit) await Promise.race(exec); } return Promise.all(results); }
 
+    const t0 = performance.now();
     const res = await runBatch(tasks, concurrency);
+    const totalMs = Math.round(performance.now() - t0);
     const success = res.filter(r => r.success).sort((a, b) => b.speed - a.speed);
+    const fail = res.filter(r => !r.success);
+    log('测速完成: ' + totalMs + 'ms, 成功 ' + success.length + ', 失败 ' + fail.length, success.length ? 'ok' : 'err');
+    for (const r of fail) log('  [失败] ' + r.node + ' - ' + r.error + ' (' + Math.round(r.duration) + 'ms)', 'warn');
+    for (const r of success.slice(0, 5)) log('  [成功] ' + r.node + ' - ' + r.speed.toFixed(2) + ' KB/s (' + Math.round(r.duration) + 'ms)', 'ok');
+    if (success.length > 5) log('  ... 其余 ' + (success.length - 5) + ' 个可用节点略', 'info');
     try { localStorage.setItem('proxySpeedTest', JSON.stringify({ timestamp: Date.now(), results: res })); } catch {}
 
     const sel = $('proxySelect');
@@ -191,6 +257,7 @@ async function startSpeedTest() {
     }
     if (success.length > 0) { sel.value = success[0].node; selectedProxy = success[0].node; }
     status.textContent = success.length > 0 ? '最快: ' + success[0].node : '全部不可用';
+    if (success.length > 0) log('已自动选择最快节点: ' + selectedProxy, 'ok');
     btn.disabled = false;
 }
 
@@ -226,13 +293,17 @@ function showProgress(pct, detail) {
 }
 
 async function doDownload() {
-    if (!entry) { setStatus('文件记录不存在', 'err'); return; }
+    if (!entry) { setStatus('文件记录不存在', 'err'); log('未找到文件记录，无法下载', 'err'); return; }
     const btn = $('downloadBtn');
     btn.disabled = true;
     setStatus('', '');
     showProgress(0, '准备中...');
+    downloadStartTs = performance.now();
 
     const fileName = entry.path.split('/').pop();
+    log('======== 开始下载: ' + fileName + ' ========', 'info');
+    log('类型: ' + entry.type + ', 大小: ' + formatSize(entry.size) + ' (' + entry.size + ' 字节)', 'info');
+    log('下载源: ' + (selectedProxy ? '代理 ' + selectedProxy : '直连 raw'), 'info');
 
     try {
         if (entry.type === 'merged') {
@@ -240,12 +311,19 @@ async function doDownload() {
             const total = chunks.length;
             const blobs = [];
             let completed = 0;
+            log('分块文件: 共 ' + total + ' 块, 每块 ' + formatSize(entry.chunkSize || 0), 'info');
 
             const tasks = chunks.map((chunkPath, i) => async () => {
                 const url = buildFileUrl(chunkPath);
+                const t0 = performance.now();
+                log('开始分块 ' + (i + 1) + '/' + total + ': ' + url, 'info');
                 const resp = await fetch(url);
                 if (!resp.ok) throw new Error('分块 ' + chunkPath + ' 失败: HTTP ' + resp.status);
+                const cl = resp.headers.get('content-length');
                 const blob = await resp.blob();
+                const dur = Math.round(performance.now() - t0);
+                const speed = blob.size > 0 ? (blob.size / 1024) / (dur / 1000) : 0;
+                log('分块 ' + (i + 1) + '/' + total + ' 完成: HTTP ' + resp.status + ', ' + formatSize(blob.size) + (cl ? ' (header ' + formatSize(parseInt(cl, 10)) + ')' : '') + ', ' + dur + 'ms, ' + speed.toFixed(1) + ' KB/s', 'ok');
                 blobs[i] = blob;
                 completed++;
                 const pct = Math.round((completed / total) * 100);
@@ -253,6 +331,7 @@ async function doDownload() {
             });
 
             const concurrency = 5;
+            log('并发下载: ' + concurrency + ' 线程', 'info');
             const exec = [];
             for (const t of tasks) {
                 const p = t().then(r => { exec.splice(exec.indexOf(p), 1); return r; });
@@ -261,48 +340,98 @@ async function doDownload() {
             }
             await Promise.all(exec);
 
+            const totalBlobSize = blobs.reduce((s, b) => s + b.size, 0);
+            log('全部分块下载完成: 合计 ' + formatSize(totalBlobSize), 'ok');
+            if (totalBlobSize !== entry.size) log('警告: 分块合计大小 ' + totalBlobSize + ' ≠ 索引大小 ' + entry.size, 'warn');
+
             showProgress(95, '正在拼接...');
             const merged = new Blob(blobs);
+            log('拼接完成: ' + formatSize(merged.size), 'ok');
 
             if (entry.sha256) {
                 showProgress(97, '校验 SHA256...');
+                log('SHA256 校验中... 期望: ' + entry.sha256, 'info');
+                const t1 = performance.now();
                 const hash = await sha256Blob(merged);
-                if (hash !== entry.sha256) { setStatus('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash, 'err'); btn.disabled = false; return; }
+                const ok = hash === entry.sha256;
+                log('SHA256 计算完成 (' + Math.round(performance.now() - t1) + 'ms): ' + hash, ok ? 'ok' : 'err');
+                if (!ok) {
+                    setStatus('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash, 'err');
+                    log('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash, 'err');
+                    btn.disabled = false;
+                    return;
+                }
+            } else {
+                log('索引无 SHA256 记录，跳过校验', 'warn');
             }
 
             showProgress(100, '保存中...');
             saveBlob(merged, fileName);
             setStatus('下载完成，SHA256 校验通过', 'ok');
+            log('保存触发完成, 总耗时 ' + Math.round((performance.now() - downloadStartTs) / 1000) + 's', 'ok');
         } else {
             const url = buildFileUrl(entry.path);
             showProgress(10, '下载中...');
+            log('普通文件下载: ' + url, 'info');
+            const t0 = performance.now();
             const resp = await fetch(url);
-            if (!resp.ok) { setStatus('下载失败: HTTP ' + resp.status, 'err'); btn.disabled = false; return; }
+            if (!resp.ok) {
+                setStatus('下载失败: HTTP ' + resp.status, 'err');
+                log('HTTP 错误: ' + resp.status + ' ' + resp.statusText, 'err');
+                btn.disabled = false;
+                return;
+            }
+            const ct = resp.headers.get('content-type');
+            const cl = resp.headers.get('content-length');
+            log('响应: HTTP ' + resp.status + ', Content-Type: ' + (ct || '未知') + ', Content-Length: ' + (cl || '未知'), 'info');
             const reader = resp.body.getReader();
-            const contentLength = parseInt(resp.headers.get('content-length') || entry.size, 10);
+            const contentLength = parseInt(cl || entry.size, 10);
             const chunks = [];
             let received = 0;
+            let lastPct = 0;
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 chunks.push(value);
                 received += value.length;
-                showProgress(Math.round((received / contentLength) * 90), formatSize(received) + ' / ' + formatSize(contentLength));
+                const pct = Math.round((received / contentLength) * 90);
+                if (pct !== lastPct) {
+                    showProgress(pct, formatSize(received) + ' / ' + formatSize(contentLength));
+                    lastPct = pct;
+                }
             }
+            const dur = Math.round(performance.now() - t0);
+            const speed = received > 0 ? (received / 1024) / (dur / 1000) : 0;
+            log('流式读取完成: ' + formatSize(received) + ', ' + dur + 'ms, ' + speed.toFixed(1) + ' KB/s', 'ok');
+            if (received !== entry.size) log('警告: 实际大小 ' + received + ' ≠ 索引大小 ' + entry.size, 'warn');
             const blob = new Blob(chunks);
 
             if (entry.sha256) {
                 showProgress(95, '校验 SHA256...');
+                log('SHA256 校验中... 期望: ' + entry.sha256, 'info');
+                const t1 = performance.now();
                 const hash = await sha256Blob(blob);
-                if (hash !== entry.sha256) { setStatus('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash, 'err'); btn.disabled = false; return; }
+                const ok = hash === entry.sha256;
+                log('SHA256 计算完成 (' + Math.round(performance.now() - t1) + 'ms): ' + hash, ok ? 'ok' : 'err');
+                if (!ok) {
+                    setStatus('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash, 'err');
+                    log('SHA256 校验失败: 期望 ' + entry.sha256 + '，实际 ' + hash, 'err');
+                    btn.disabled = false;
+                    return;
+                }
+            } else {
+                log('索引无 SHA256 记录，跳过校验', 'warn');
             }
 
             showProgress(100, '保存中...');
             saveBlob(blob, fileName);
             setStatus('下载完成，SHA256 校验通过', 'ok');
+            log('保存触发完成, 总耗时 ' + Math.round((performance.now() - downloadStartTs) / 1000) + 's', 'ok');
         }
     } catch (e) {
         setStatus('下载失败: ' + e.message, 'err');
+        log('下载异常: ' + e.message, 'err');
+        if (e.stack) log('堆栈: ' + e.stack.split('\n').slice(0, 3).join(' | '), 'err');
     }
     btn.disabled = false;
 }
@@ -312,6 +441,12 @@ $('downloadBtn').addEventListener('click', doDownload);
 window.addEventListener('DOMContentLoaded', function() {
     initProxyZone();
     loadEntry();
+    $('debugToggle').addEventListener('click', function() {
+        const d = $('debug');
+        const show = d.style.display === 'none' || d.style.display === '';
+        d.style.display = show ? 'block' : 'none';
+        this.textContent = show ? '隐藏日志' : '调试日志';
+    });
 });
 </script>
 </body>
