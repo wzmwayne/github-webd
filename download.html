@@ -19,6 +19,9 @@ h1{font-size:22px;margin-bottom:20px;color:#333}
 #proxyZone button{padding:6px 16px;border:1px solid #1976d2;background:#1976d2;color:#fff;border-radius:4px;cursor:pointer;font-size:13px}
 #proxyZone button:hover{background:#1565c0}
 #proxyStatus{font-size:12px;color:#666}
+#threadZone{display:flex;align-items:center;gap:6px}
+#threadZone label{font-size:13px;color:#666}
+#threadZone input{width:60px;padding:6px;border:1px solid #ccc;border-radius:4px;font-size:13px}
 #actions{margin-bottom:16px}
 #actions button{padding:12px 36px;background:#4caf50;color:#fff;border:none;border-radius:6px;font-size:16px;cursor:pointer}
 #actions button:hover{background:#388e3c}
@@ -55,6 +58,7 @@ h1{font-size:22px;margin-bottom:20px;color:#333}
     <select id="proxySelect"></select>
     <button id="speedTestBtn">测速</button>
     <span id="proxyStatus"></span>
+    <span id="threadZone"><label for="threadInput">线程</label><input type="number" id="threadInput" min="1" max="20" value="5"></span>
 </div>
 
 <div id="actions">
@@ -292,6 +296,51 @@ function showProgress(pct, detail) {
     }
 }
 
+const speedSamples = [];
+function pushSpeedSample(bytes) {
+    const now = performance.now();
+    speedSamples.push({ t: now, bytes });
+    while (speedSamples.length > 2 && speedSamples[0].t < now - 10000) speedSamples.shift();
+}
+function calcSpeed() {
+    const now = performance.now();
+    const fresh = speedSamples.filter(s => now - s.t <= 5000);
+    if (fresh.length < 2) return 0;
+    const first = fresh[0];
+    const last = fresh[fresh.length - 1];
+    const dt = (last.t - first.t) / 1000;
+    if (dt <= 0) return 0;
+    return (last.bytes - first.bytes) / dt;
+}
+function speedText(bytesPerSec) {
+    return bytesPerSec > 0 ? formatSize(bytesPerSec) + '/s' : '--';
+}
+function fmtEta(seconds) {
+    if (!isFinite(seconds) || seconds < 0) return '--:--';
+    seconds = Math.round(seconds);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    const pad = n => String(n).padStart(2, '0');
+    return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s);
+}
+
+const THREAD_KEY = 'downloadThreads';
+function initThreadZone() {
+    const input = $('threadInput');
+    const saved = localStorage.getItem(THREAD_KEY);
+    if (saved && /^[1-9]\d*$/.test(saved)) input.value = Math.max(1, Math.min(20, parseInt(saved, 10)));
+    input.addEventListener('change', function() {
+        let v = Math.max(1, Math.min(20, parseInt(this.value, 10) || 5));
+        this.value = v;
+        try { localStorage.setItem(THREAD_KEY, String(v)); } catch {}
+        log('设置并发线程数: ' + v, 'info');
+    });
+}
+function currentThreads() {
+    return Math.max(1, Math.min(20, parseInt($('threadInput').value, 10) || 5));
+}
+
 async function doDownload() {
     if (!entry) { setStatus('文件记录不存在', 'err'); log('未找到文件记录，无法下载', 'err'); return; }
     const btn = $('downloadBtn');
@@ -299,6 +348,7 @@ async function doDownload() {
     setStatus('', '');
     showProgress(0, '准备中...');
     downloadStartTs = performance.now();
+    speedSamples.length = 0;
     const MAX_RETRY = 3;
 
     const fileName = entry.path.split('/').pop();
@@ -336,7 +386,7 @@ async function doDownload() {
             const recvBytes = new Array(total).fill(0);
             const expBytes = new Array(total).fill(0);
             const chunkSize = entry.chunkSize || Math.ceil(entry.size / total);
-            const concurrency = 5;
+            const concurrency = currentThreads();
             let aborted = false;
             let lastRender = 0;
 
@@ -348,6 +398,8 @@ async function doDownload() {
                 if (!force && now - lastRender < 100) return;
                 lastRender = now;
                 const sum = recvBytes.reduce((s, v) => s + v, 0);
+                const speed = calcSpeed();
+                const eta = speed > 0 ? (entry.size - sum) / speed : -1;
                 const lines = [];
                 for (let i = 0; i < total; i++) {
                     const exp = expBytes[i] || chunkSize;
@@ -355,7 +407,8 @@ async function doDownload() {
                     lines.push('块 ' + (i + 1) + '/' + total + ': ' + formatSize(recvBytes[i]) + ' / ' + formatSize(exp) + done);
                 }
                 const pct = Math.min(99, Math.round((sum / entry.size) * 100));
-                showProgress(pct, '合计: ' + formatSize(sum) + ' / ' + formatSize(entry.size) + ' (' + pct + '%)\n' + lines.join('\n'));
+                showProgress(pct, '合计: ' + formatSize(sum) + ' / ' + formatSize(entry.size) + ' (' + pct + '%) | 速度: ' + speedText(speed) + ' | 剩余: ' + fmtEta(eta) + '\n' + lines.join('\n'));
+                pushSpeedSample(sum);
             }
 
             async function fetchChunk(chunkPath, i) {
@@ -475,15 +528,21 @@ async function doDownload() {
             const chunks = [];
             let received = 0;
             let lastPct = 0;
+            let lastTick = 0;
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 chunks.push(value);
                 received += value.length;
                 const pct = Math.round((received / contentLength) * 90);
-                if (pct !== lastPct) {
-                    showProgress(pct, '已下载 ' + formatSize(received) + ' / ' + formatSize(contentLength));
+                pushSpeedSample(received);
+                const nowMs = performance.now();
+                if (pct !== lastPct || nowMs - lastTick > 300) {
+                    lastTick = nowMs;
                     lastPct = pct;
+                    const speed = calcSpeed();
+                    const eta = speed > 0 ? (contentLength - received) / speed : -1;
+                    showProgress(pct, '已下载 ' + formatSize(received) + ' / ' + formatSize(contentLength) + ' | 速度: ' + speedText(speed) + ' | 剩余: ' + fmtEta(eta));
                 }
             }
             const dur = Math.round(performance.now() - t0);
@@ -526,6 +585,7 @@ $('downloadBtn').addEventListener('click', doDownload);
 
 window.addEventListener('DOMContentLoaded', function() {
     initProxyZone();
+    initThreadZone();
     loadEntry();
     $('debugToggle').addEventListener('click', function() {
         const d = $('debug');
